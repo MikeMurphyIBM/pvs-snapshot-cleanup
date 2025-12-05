@@ -34,27 +34,41 @@ ibmcloud pi ws target "$PVS_CRN"
 
 echo "2. Identifying attached volumes on LPAR: $LPAR_NAME"
 
-# List volumes attached to the LPAR
-# Using 'ibmcloud pi instance volume list' to list all attached volumes [1, 2]
-VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_NAME" --json 2>/dev/null || echo "[]")
+# List volumes attached to the LPAR. The failover '|| echo "[]"' handles CLI command failure (exit code > 0).
+# VOLUME_DATA still needs robust parsing in case the command succeeds but returns empty/null attachments array.
+VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_NAME" --json 2>/dev/null || echo "{}")
 
-if [[ "$VOLUME_DATA" == "[]" ]]; then
-    echo "Warning: No volumes found attached to LPAR '$LPAR_NAME'. Resources might already be cleaned up."
-    # We exit gracefully if nothing is attached, as the objective is met.
-    exit 0
-fi
+# --- Improved Robust Parsing using jq ---
 
-# Extract Boot Volume ID (must be bootable: true)
-# Handle potential null iterator gracefully by ensuring input is an array and setting default to empty string
-CLONE_BOOT_ID=$(echo "$VOLUME_DATA" | jq -r '[.volumeAttachments[] | select(.volume.bootable == true) | .volume.volumeID] | join(",")' | sed 's/^,\|,$//')
+# 1. Extract Boot Volume ID(s): Filters for bootable == true.
+#    Logic: Check if .volumeAttachments exists AND is an array. If so, iterate over elements; otherwise, use empty.
+CLONE_BOOT_ID=$(echo "$VOLUME_DATA" | jq -r '
+    .volumeAttachments | 
+    if type == "array" then .[] else empty end
+    | select(.volume.bootable == true)
+    | .volume.volumeID
+' | paste -sd ',' - || true | sed 's/^,\|,$//')
 
-# Extract Data Volume IDs (must be bootable: false)
-CLONE_DATA_IDS=$(echo "$VOLUME_DATA" | jq -r '[.volumeAttachments[] | select(.volume.bootable == false) | .volume.volumeID] | join(",")' | sed 's/^,\|,$//')
+# 2. Extract Data Volume ID(s): Filters for bootable == false.
+CLONE_DATA_IDS=$(echo "$VOLUME_DATA" | jq -r '
+    .volumeAttachments | 
+    if type == "array" then .[] else empty end
+    | select(.volume.bootable == false)
+    | .volume.volumeID
+' | paste -sd ',' - || true | sed 's/^,\|,$//')
 
-# Combine all IDs for final deletion (uses volume IDs, not necessarily names)
+
+# --- Remaining logic (combining IDs and extracting Snapshot Time Reference) ---
+
+# Combine all IDs for final deletion (uses volume IDs)
 ALL_CLONE_IDS="${CLONE_BOOT_ID}"
 if [[ -n "$CLONE_DATA_IDS" ]]; then
-    ALL_CLONE_IDS="${ALL_CLONE_IDS},${CLONE_DATA_IDS}"
+    # Ensure there is a comma only if CLONE_BOOT_ID exists
+    if [[ -n "$CLONE_BOOT_ID" ]]; then
+        ALL_CLONE_IDS="${ALL_CLONE_IDS},${CLONE_DATA_IDS}"
+    else
+        ALL_CLONE_IDS="${CLONE_DATA_IDS}"
+    fi
 fi
 ALL_CLONE_IDS=$(echo "$ALL_CLONE_IDS" | sed 's/^,\|,$//;s/,,/,/g')
 
@@ -62,16 +76,22 @@ echo "Discovered Boot ID: ${CLONE_BOOT_ID:-N/A}"
 echo "Discovered Data IDs: ${CLONE_DATA_IDS:-N/A}"
 echo "All Volume IDs for deletion: ${ALL_CLONE_IDS}"
 
-# Determine the time reference for the snapshot search from the cloned volume names
-if [[ -n "$CLONE_BOOT_ID" || -n "$CLONE_DATA_IDS" ]]; then
-    # Grab the name of the first data volume (or boot volume if no data volumes)
-    VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumeAttachments.volume.name' 2>/dev/null)
+# Determine the time reference for the snapshot search
+if [[ -n "$ALL_CLONE_IDS" ]]; then
+    # Grab the name of the first attached volume that matches the naming convention
+    VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
+        .volumeAttachments | 
+        if type == "array" then ..volume.name else empty end
+    ' 2>/dev/null)
     
-    # Extract YYYYMMDDHHMM timestamp from the volume name using regex
+    # Extract YYYYMMDDHHMM timestamp (12 digits) from the volume name
     # Expected format: clone-CLONE-RESTORE-YYYYMMDDHHMM-x
-    if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([3-11]{12}) ]]; then
-        SNAPSHOT_TIME_REF="${BASH_REMATCH[3]}"
+    # We rely on the naming convention prefix: CLONE-RESTORE-
+    if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
+        SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
         echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
+    else
+        echo "Warning: Could not extract timestamp from volume name '$VOLUME_NAME'."
     fi
 fi
 
