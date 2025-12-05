@@ -7,217 +7,209 @@ RESOURCE_GROP_NAME="Default"     # Targeted Resource Group
 PVS_CRN="crn:v1:bluemix:public:power-iaas:dal10:a/21d74dd4fe814dfca20570bbb93cdbff:cc84ef2f-babc-439f-8594-571ecfcbe57a::" # Full PowerVS Workspace CRN
 CLOUD_INSTANCE_ID="cc84ef2f-babc-439f-8594-571ecfcbe57a" # PowerVS Workspace ID
 LPAR_NAME="empty-ibmi-lpar"      # Name of the target LPAR
-PRIMARY_LPAR="get-snapshot"      # Name of the source LPAR for snapshot
-CLONE_NAME_PREFIX="CLONE-RESTORE-$(date +"%Y%m%d%H%M")"   # Unique prefix for the new cloned volumes, excluding seconds (%S)
-# These will be populated in the discovery phase:
-CLONE_BOOT_ID=""                 # Tracks the ID of the dynamically created boot volume
-CLONE_DATA_IDS=""                # Tracks the comma-separated IDs of the dynamically created data volumes
-SOURCE_SNAPSHOT_ID=""            # Tracks the ID of the discovered source snapshot
-ALL_CLONE_IDS=""                 # Tracks the comma-separated IDs of the volumes contained within the snapshot
-JOB_SUCCESS=0                    # 0 = Failure (Default), 1 = Success (Set at end of script)
+JOB_SUCCESS=0 # Default to failure for safety in case of crash
+
+# --- Dynamic Variables (Populated during Discovery) ---
+CLONE_BOOT_ID=""
+CLONE_DATA_IDS=""
+ALL_CLONE_IDS=""
+SNAPSHOT_ID=""
+SNAPSHOT_TIME_REF=""
+
+# --- Configuration ---
+POLL_INTERVAL=60 # seconds
+MAX_POLL_ITERATIONS=20 # Max 20 minutes for LPAR shutdown, adjustment applied later for volume detach
 
 # ================================================================
-echo "CRITICAL CLEANUP: Initiating LPAR shutdown and volume rollback..."
+echo "--- CRITICAL CLEANUP: PowerVS Resource Rollback Started ---"
 # ================================================================
 
 # ----------------------------------------------------------------
-# DISCOVERY PHASE: Login, Target Workspace, and Identify Resources
+# PHASE 0: Authentication and Resource Discovery
 # ----------------------------------------------------------------
 
-# Ensure required commands are available (assuming `jq` is installed in the environment)
-
-echo "--- 0. Authentication and Service Targeting ---"
-# Log in using the API key environment variable (assumes IBMCLOUD_API_KEY is available in the shell/env) [3]
-ibmcloud login --apikey "$API_KEY" -r "$REGION" -g "$RESOURCE_GROP_NAME"
-
-if [[ -z "$PVS_CRN" ]]; then
-    echo "FATAL: PVS_CRN variable is not set. Cannot proceed with targeting."
-    exit 1
-fi
-# Target the specific Power Virtual Server workspace using its CRN [1, 2]
+echo "1. Authenticating and targeting workspace: $PVS_CRN in $REGION..."
+ibmcloud login --apikey "$API_KEY" -r "$REGION" -g "$RESOURCE_GROP_NAME" > /dev/null
 ibmcloud pi ws target "$PVS_CRN"
 
-echo "--- 0.1. Identifying Cloned Volumes on LPAR: $LPAR_NAME ---"
+echo "2. Identifying attached volumes on LPAR: $LPAR_NAME"
 
-# Use ibmcloud pi instance volume list to get all volumes attached to the failed LPAR in JSON format [4-6]
-# jq is used to extract IDs and determine if they are bootable [7, 8]
+# List volumes attached to the LPAR
+# Using 'ibmcloud pi instance volume list' to list all attached volumes [1, 2]
+VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_NAME" --json 2>/dev/null || echo "[]")
 
-VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_NAME" --json 2>/dev/null)
-
-if [[ -z "$VOLUME_DATA" || "$VOLUME_DATA" == "[]" ]]; then
-    echo "Warning: No volumes found attached to LPAR '$LPAR_NAME'. Skipping volume detachment/deletion."
-else
-    # Extract Boot Volume ID (must be bootable: true) [9]
-    CLONE_BOOT_ID=$(echo "$VOLUME_DATA" | jq -r '.volumeAttachments[] | select(.volume.bootable == true) | .volume.volumeID' | tr '\n' ',' | sed 's/,$//')
-
-    # Extract Data Volume IDs (must be bootable: false)
-    # We collect all non-boot volumes attached to the LPAR
-    CLONE_DATA_IDS=$(echo "$VOLUME_DATA" | jq -r '.volumeAttachments[] | select(.volume.bootable == false) | .volume.volumeID' | paste -sd ',' -)
-    
-    # Combine all IDs for final deletion
-    if [[ -n "$CLONE_BOOT_ID" ]]; then
-        ALL_CLONE_IDS="${CLONE_BOOT_ID}"
-    fi
-    if [[ -n "$CLONE_DATA_IDS" ]]; then
-        ALL_CLONE_IDS="${ALL_CLONE_IDS},${CLONE_DATA_IDS}"
-    fi
-    
-    # Cleanup volume list string formatting
-    ALL_CLONE_IDS=$(echo "$ALL_CLONE_IDS" | sed 's/^,//;s/,,/,/g')
-
-    echo "Identified Boot ID: $CLONE_BOOT_ID"
-    echo "Identified Data IDs: $CLONE_DATA_IDS"
-    echo "All Volume IDs for Deletion: $ALL_CLONE_IDS"
+if [[ "$VOLUME_DATA" == "[]" ]]; then
+    echo "Warning: No volumes found attached to LPAR '$LPAR_NAME'. Resources might already be cleaned up."
+    # We exit gracefully if nothing is attached, as the objective is met.
+    exit 0
 fi
 
-echo "--- 0.2. Identifying Source Snapshot ID ---"
-# Note: The snapshot ID is often passed down from the previous successful operation or derived from the cloning job metadata.
-# We will search for snapshots matching the likely naming convention (Snap_PRIMARY_LPAR_*) or a known ID.
-# Since the exact name isn't provided, we list snapshots and rely on external naming conventions if SOURCE_SNAPSHOT_ID is empty.
-if [[ -z "$SOURCE_SNAPSHOT_ID" ]]; then
-    echo "Attempting to search for the source snapshot linked to $PRIMARY_LPAR..."
-    # Query snapshots and filter by instance name $PRIMARY_LPAR, assuming the source LPAR is where the snapshot was taken.
-    # We must ensure to get the ID, not the CRN [10]. We use the volume snapshot list command [11].
-    
-    # NOTE: Since reliable dynamic discovery of the source snapshot used for cloning (if the clone succeeded but the boot failed) 
-    # requires knowing the naming convention or job output history, we implement a general list filter.
-    
-    # Example lookup (assuming the snapshot name contains the primary LPAR name):
-    SNAPSHOT_LOOKUP=$(ibmcloud pi instance snapshot list "$PRIMARY_LPAR" --json 2>/dev/null)
-    # This example extracts the ID of the newest snapshot on the primary LPAR, which is a common (but potentially risky) assumption in rollback logic:
-    SOURCE_SNAPSHOT_ID=$(echo "$SNAPSHOT_LOOKUP" | jq -r '.pvmInstanceSnapshots.snapshotID' || true)
+# Extract Boot Volume ID (must be bootable: true)
+# Handle potential null iterator gracefully by ensuring input is an array and setting default to empty string
+CLONE_BOOT_ID=$(echo "$VOLUME_DATA" | jq -r '[.volumeAttachments[] | select(.volume.bootable == true) | .volume.volumeID] | join(",")' | sed 's/^,\|,$//')
 
-    if [[ -n "$SOURCE_SNAPSHOT_ID" ]]; then
-        echo "Found potential Snapshot ID on $PRIMARY_LPAR: $SOURCE_SNAPSHOT_ID"
-    else
-        echo "Warning: Source Snapshot ID could not be dynamically determined. Snapshot deletion step may be skipped."
+# Extract Data Volume IDs (must be bootable: false)
+CLONE_DATA_IDS=$(echo "$VOLUME_DATA" | jq -r '[.volumeAttachments[] | select(.volume.bootable == false) | .volume.volumeID] | join(",")' | sed 's/^,\|,$//')
+
+# Combine all IDs for final deletion (uses volume IDs, not necessarily names)
+ALL_CLONE_IDS="${CLONE_BOOT_ID}"
+if [[ -n "$CLONE_DATA_IDS" ]]; then
+    ALL_CLONE_IDS="${ALL_CLONE_IDS},${CLONE_DATA_IDS}"
+fi
+ALL_CLONE_IDS=$(echo "$ALL_CLONE_IDS" | sed 's/^,\|,$//;s/,,/,/g')
+
+echo "Discovered Boot ID: ${CLONE_BOOT_ID:-N/A}"
+echo "Discovered Data IDs: ${CLONE_DATA_IDS:-N/A}"
+echo "All Volume IDs for deletion: ${ALL_CLONE_IDS}"
+
+# Determine the time reference for the snapshot search from the cloned volume names
+if [[ -n "$CLONE_BOOT_ID" || -n "$CLONE_DATA_IDS" ]]; then
+    # Grab the name of the first data volume (or boot volume if no data volumes)
+    VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumeAttachments.volume.name' 2>/dev/null)
+    
+    # Extract YYYYMMDDHHMM timestamp from the volume name using regex
+    # Expected format: clone-CLONE-RESTORE-YYYYMMDDHHMM-x
+    if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([3-11]{12}) ]]; then
+        SNAPSHOT_TIME_REF="${BASH_REMATCH[3]}"
+        echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
     fi
 fi
 
 # ----------------------------------------------------------------
-# STEP 1: SHUT DOWN LPAR AND POLL FOR SHUTOFF STATE
+# PHASE 1: Shut Down LPAR and Poll for SHUTOFF
 # ----------------------------------------------------------------
-echo "1. Shutting down LPAR: $LPAR_NAME..."
-# Initiate immediate shutdown of the LPAR [12, 13]
-ibmcloud pi instance action "$LPAR_NAME" --operation stop || {
-    echo "Warning: Failed to initiate LPAR stop request. Continuing with polling."
-}
+echo "3. Shutting down LPAR: $LPAR_NAME..."
+# Use ibmcloud pi instance action with the stop operation [12, 13]
+ibmcloud pi instance action "$LPAR_NAME" --operation stop || echo "Warning: Failed to initiate LPAR stop. Continuing with polling."
 
-LPAR_STATUS_CHECK_ITERATIONS=0
-# Loop until status is SHUTOFF
-while [[ $LPAR_STATUS_CHECK_ITERATIONS -lt 20 ]]; do 
-    LPAR_STATUS=$(ibmcloud pi instance get "$LPAR_NAME" --json | jq -r '.status' 2>/dev/null) [8, 14, 15]
+ITERATIONS=0
+while [[ $ITERATIONS -lt $MAX_POLL_ITERATIONS ]]; do
+    LPAR_STATUS=$(ibmcloud pi instance get "$LPAR_NAME" --json | jq -r '.status' 2>/dev/null || echo "NOT_FOUND")
 
     if [[ "$LPAR_STATUS" == "SHUTOFF" ]]; then
-        echo "SUCCESS: LPAR $LPAR_NAME is in SHUTOFF state."
+        echo "SUCCESS: LPAR $LPAR_NAME is in SHUTOFF state [14]."
         break
-    # Exit condition if LPAR goes into a terminal error state
     elif [[ "$LPAR_STATUS" == "ERROR" ]]; then
         echo "FATAL: LPAR $LPAR_NAME entered ERROR state during shutdown. Proceeding to detach volumes."
         break
+    elif [[ "$LPAR_STATUS" == "NOT_FOUND" ]]; then
+        echo "WARNING: LPAR $LPAR_NAME not found. Assuming already removed. Proceeding to volume deletion."
+        break
     else
-        echo "Polling LPAR status: $LPAR_NAME is $LPAR_STATUS. Waiting 60 seconds."
-        sleep 60
-        LPAR_STATUS_CHECK_ITERATIONS=$((LPAR_STATUS_CHECK_ITERATIONS + 1))
+        echo "Polling LPAR status: $LPAR_NAME is $LPAR_STATUS. Waiting $POLL_INTERVAL seconds..."
+        sleep "$POLL_INTERVAL"
+        ITERATIONS=$((ITERATIONS + 1))
     fi
 done
 
-
 # ----------------------------------------------------------------
-# STEP 2: DETACH DATA VOLUME(S) AND POLL FOR DETACHMENT
+# PHASE 2: Detach Data Volume(s) and Poll for Detachment
 # ----------------------------------------------------------------
 if [[ -n "$CLONE_DATA_IDS" ]]; then
-    echo "2. Detaching Data Volume(s) ($CLONE_DATA_IDS) using bulk detach..."
-    # Use the bulk-detach command [16-19]
-    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary False || {
-        echo "ERROR: Failed to initiate bulk detach for data volumes. Continuing to poll state."
-    }
+    echo "4. Detaching Data Volume(s) using bulk detach: $CLONE_DATA_IDS"
+    # Use ibmcloud pi instance volume bulk-detach to detach multiple volumes at once [15-17]
+    # We specify --detach-primary False to only target data volumes if the list might be ambiguous
+    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary False || echo "Error initiating bulk detach for data volumes."
 
-    # Polling for detachment completion (Data Volumes)
-    DATA_DETACH_ITERATIONS=0
-    while true; do
-        # Check if any data volume is still attached
-        ATTACHED_DATA=$(echo "$VOLUME_DATA" | jq -r '.volumeAttachments[] | select(.volume.bootable == false) | .volume.volumeID' | grep -F -- "$CLONE_DATA_IDS" || true)
+    ITERATIONS=0
+    while [[ $ITERATIONS -lt 15 ]]; do # Max 15 mins for data detach
+        # Check attached volumes list
+        ATTACHED_VOLUMES=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumeAttachments[] | select(.volume.bootable == false) | .volume.volumeID] | join(",")' | grep -F -- "$CLONE_DATA_IDS" || true)
 
-        if [[ -z "$ATTACHED_DATA" ]]; then
+        if [[ -z "$ATTACHED_VOLUMES" ]]; then
             echo "SUCCESS: All Data volumes successfully detached."
             break
-        elif [[ $DATA_DETACH_ITERATIONS -ge 15 ]]; then
-            echo "FATAL: Data volume detachment timed out. Manual cleanup required."
-            break
         else
-            echo "Polling data volume detach status. Waiting 60 seconds..."
-            sleep 60
-            DATA_DETACH_ITERATIONS=$((DATA_DETACH_ITERATIONS + 1))
+            echo "Polling data volume detach status. Still attached: $ATTACHED_VOLUMES. Waiting $POLL_INTERVAL seconds..."
+            sleep "$POLL_INTERVAL"
+            ITERATIONS=$((ITERATIONS + 1))
         fi
     done
 else
-    echo "2. Skipping Data Volume Detachment: No data volumes identified."
+    echo "5. Skipping Data Volume Detachment: No data volumes identified."
 fi
 
 # ----------------------------------------------------------------
-# STEP 3: DETACH BOOT VOLUME AND POLL FOR DETACHMENT
+# PHASE 3: Detach Boot Volume and Poll for Detachment
 # ----------------------------------------------------------------
 if [[ -n "$CLONE_BOOT_ID" ]]; then
-    echo "3. Detaching Boot Volume: $CLONE_BOOT_ID..."
-    # Detach the boot volume [20-22]
-    ibmcloud pi instance volume detach "$LPAR_NAME" --volume "$CLONE_BOOT_ID" || {
-        echo "ERROR: Failed to initiate detach for boot volume."
-    }
+    echo "6. Detaching Boot Volume: $CLONE_BOOT_ID"
+    # Use individual detach command for the boot volume [18, 19]
+    ibmcloud pi instance volume detach "$LPAR_NAME" --volume "$CLONE_BOOT_ID" || echo "Error initiating detach for boot volume."
 
-    # Polling for detachment completion (Boot Volume)
-    BOOT_DETACH_ITERATIONS=0
-    while true; do
-        # Check if the boot volume ID is still listed as attached to the instance
-        BOOT_STATUS=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '.volumeAttachments[] | .volume.volumeID' | grep -F "$CLONE_BOOT_ID" || true)
+    ITERATIONS=0
+    while [[ $ITERATIONS -lt 10 ]]; do # Max 10 mins for boot detach
+        # Check if the boot volume ID is still listed as attached
+        BOOT_STATUS=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumeAttachments[] | select(.volume.bootable == true) | .volume.volumeID] | join(",")' | grep -F "$CLONE_BOOT_ID" || true)
 
         if [[ -z "$BOOT_STATUS" ]]; then
             echo "SUCCESS: Boot volume $CLONE_BOOT_ID successfully detached."
             break
-        elif [[ $BOOT_DETACH_ITERATIONS -ge 10 ]]; then 
-            echo "FATAL: Boot volume detachment timed out. Manual cleanup required for volume: $CLONE_BOOT_ID."
-            exit 1 # Stop deletion as attached volumes cannot be deleted
         else
-            echo "Polling boot volume detach status. Waiting 60 seconds..."
-            sleep 60
-            BOOT_DETACH_ITERATIONS=$((BOOT_DETACH_ITERATIONS + 1))
+            echo "Polling boot volume detach status. Still attached. Waiting $POLL_INTERVAL seconds..."
+            sleep "$POLL_INTERVAL"
+            ITERATIONS=$((ITERATIONS + 1))
         fi
     done
+    if [[ $ITERATIONS -eq 10 ]]; then
+        echo "FATAL: Boot volume detachment timed out. Volumes remain attached. Aborting subsequent deletion steps."
+        exit 1
+    fi
 else
-    echo "3. Skipping Boot Volume Detachment: No boot volume identified."
+    echo "7. Skipping Boot Volume Detachment: No boot volume identified."
+fi
+
+# ----------------------------------------------------------------
+# PHASE 4: Snapshot Discovery, Correlation (by Time), and Deletion
+# ----------------------------------------------------------------
+if [[ -n "$SNAPSHOT_TIME_REF" ]]; then
+    # Expected snapshot name format: TMP_SNAP_YYYYMMDDHHMM
+    TARGET_SNAPSHOT_NAME="TMP_SNAP_${SNAPSHOT_TIME_REF}"
+    echo "8. Searching for Snapshot matching name: ${TARGET_SNAPSHOT_NAME}..."
+
+    # List all snapshots in the workspace and filter by the target name
+    # Using the recommended 'ibmcloud pi instance snapshot list' [20, 21]
+    SNAPSHOT_LIST=$(ibmcloud pi instance snapshot list --json 2>/dev/null)
+    
+    # Filter the list for the snapshot matching the constructed name and extract its ID
+    SNAPSHOT_ID=$(echo "$SNAPSHOT_LIST" | jq -r ".pvmInstanceSnapshots[] | select(.name == \"$TARGET_SNAPSHOT_NAME\") | .snapshotID" || true)
+
+    if [[ -n "$SNAPSHOT_ID" ]]; then
+        echo "Found matching Snapshot ID ($SNAPSHOT_ID) based on time reference. Deleting now."
+        # Use ibmcloud pi instance snapshot delete [20, 22]
+        ibmcloud pi instance snapshot delete "$SNAPSHOT_ID" || {
+            echo "WARNING: Failed to delete snapshot $SNAPSHOT_ID. Manual deletion may be required."
+        }
+    else
+        echo "Warning: No snapshot found matching name: $TARGET_SNAPSHOT_NAME. Skipping snapshot deletion."
+    fi
+else
+    echo "9. Skipping Snapshot Discovery: No time reference could be established from cloned volume names."
 fi
 
 
 # ----------------------------------------------------------------
-# STEP 4: DELETE THE SNAPSHOT
-# ----------------------------------------------------------------
-if [[ -n "$SOURCE_SNAPSHOT_ID" ]]; then
-    echo "4. Deleting Snapshot: $SOURCE_SNAPSHOT_ID..."
-    # Use the instance snapshot delete command [23-25]
-    ibmcloud pi instance snapshot delete "$SOURCE_SNAPSHOT_ID" || {
-        echo "WARNING: Failed to delete snapshot $SOURCE_SNAPSHOT_ID. Continuing cleanup."
-    }
-else
-    echo "4. Skipping Snapshot Deletion: SOURCE_SNAPSHOT_ID not defined or found."
-fi
-
-
-# ----------------------------------------------------------------
-# STEP 5: DELETE BOOT AND DATA VOLUMES
+# PHASE 5: Delete Boot and Data Volumes
 # ----------------------------------------------------------------
 if [[ -n "$ALL_CLONE_IDS" ]]; then
-    echo "5. Attempting permanent bulk deletion of cloned volumes: $ALL_CLONE_IDS (Stops charges)"
-    # Use the bulk-delete command, available since CLI v1.3.0 [16, 17, 26, 27]
-    ibmcloud pi volume bulk-delete --volumes "$ALL_CLONE_IDS" || { 
+    echo "10. Deleting all cloned volumes (Boot and Data) to stop charges: $ALL_CLONE_IDS"
+    
+    # Volumes must be detached before deletion can proceed [23].
+    # Use ibmcloud pi volume bulk-delete to efficiently remove all clones [15, 24, 25]
+    ibmcloud pi volume bulk-delete --volumes "$ALL_CLONE_IDS" || {
         echo "FATAL ERROR: Failed to delete one or more cloned volumes. MANUAL CLEANUP REQUIRED for IDs: $ALL_CLONE_IDS"
-        exit 1
+        exit 1 # Exit 1 to signal failure to the parent job execution platform
     }
-    echo "Cloned volumes deleted successfully."
+    echo "SUCCESS: All cloned volumes deleted successfully."
 else
-    echo "5. Skipping Volume Deletion: No cloned Volume IDs found."
+    echo "11. Skipping Volume Deletion: No cloned Volume IDs found."
 fi
 
-# If we reached here, cleanup was performed successfully, but we must exit 1 
-# because this is a rollback function intended to signal failure to the parent process.
-echo "Cleanup phase complete. Returning failure code to main process."
-exit 1
+# --- Cleanup Complete ---
+echo "--- Full Resource Cleanup Completed Successfully. ---"
+# Since this script is the cleanup/rollback procedure, successful completion should exit 0.
+JOB_SUCCESS=1
+exit 0
+
+
+
