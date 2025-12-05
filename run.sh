@@ -36,7 +36,7 @@ ibmcloud pi ws target "$PVS_CRN"
 echo "0.2. Retrieving unique Instance ID for LPAR: $LPAR_NAME"
 # Use instance list command, which proved stable, and filter by name to get the pvmInstanceID.
 LPAR_ID=$(ibmcloud pi instance list --json 2>/dev/null | \
-          jq -r ".pvmInstances[] | select(.name == \"$LPAR_NAME\") | .pvmInstanceID" || true)
+          jq -r ".pvmInstances[] | select(.name == \"$LPAR_NAME\") | .id" || true)
 
 if [[ -z "$LPAR_ID" ]]; then
     echo "FATAL: Could not find unique Instance ID for LPAR '$LPAR_NAME'. Exiting cleanup."
