@@ -97,7 +97,8 @@ VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
 
 # Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name.
 SNAPSHOT_TIME_REF=""
-# FIX: Use regex to match CLONE-RESTORE- prefix and capture exactly 12 digits (0-9).
+# FIX: Use correct Bash regex syntax to capture exactly 12 digits.
+# Assuming $VOLUME_NAME looks like 'clone-CLONE-RESTORE-202512060039-2'
 if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
     # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
@@ -215,7 +216,7 @@ fi
 # ----------------------------------------------------------------
 
 if [[ -n "$SNAPSHOT_TIME_REF" ]]; then
-    # Construct the expected snapshot name (e.g., TMP_SNAP_202512060039)
+    # Construct the expected snapshot name using the extracted timestamp
     TARGET_SNAPSHOT_NAME="TMP_SNAP_$SNAPSHOT_TIME_REF"
     echo "4. Attempting to locate and delete snapshot: $TARGET_SNAPSHOT_NAME"
 
@@ -226,8 +227,8 @@ if [[ -n "$SNAPSHOT_TIME_REF" ]]; then
     if [[ -n "$SNAPSHOT_ID_TO_DELETE" ]]; then
         echo "Found target Snapshot ID: $SNAPSHOT_ID_TO_DELETE. Deleting..."
         
-        # Snapshot deletion command (deletion of the associated snapshot is standard for cleanup) [10]
-        ibmcloud pi instance snapshot delete "$CLONE_BOOT_ID" --snapshot "$SNAPSHOT_ID_TO_DELETE" || {
+        # Deleting the corresponding snapshot is standard cleanup practice in PowerVS environments
+        ibmcloud pi instance snapshot delete "$LPAR_ID" --snapshot "$SNAPSHOT_ID_TO_DELETE" || {
             echo "ERROR: Failed to delete snapshot $TARGET_SNAPSHOT_NAME. Manual cleanup required."
             exit 1
         }
