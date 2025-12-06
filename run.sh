@@ -46,7 +46,6 @@ echo "Found Instance ID: $LPAR_ID"
 
 # --- MODIFIED STEP: Identify attached volumes using Instance ID ---
 echo "0.3. Identifying attached volumes using Instance ID: $LPAR_ID"
-# Use the stable Instance ID to list volumes attached to the instance [Conversation History].
 VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_ID" --json 2>/dev/null || echo "{}")
 
 # Check if volume data is empty/malformed
@@ -54,9 +53,7 @@ if [[ "$VOLUME_DATA" == "{}" || "$VOLUME_DATA" == "[]" ]]; then
     echo "Warning: Volume list retrieval failed or LPAR '$LPAR_NAME' has no attached volumes."
 fi
 
-# --- CORRECTED Parsing using jq (Targeting the actual '.volumes' key) ---
-
-# 1. Extract Boot Volume ID(s): Filters for bootable == true.
+# 1. Extract Boot Volume ID(s)
 CLONE_BOOT_ID=$(echo "$VOLUME_DATA" | jq -r '
     .volumes | 
     if type == "array" then .[] else empty end
@@ -64,7 +61,7 @@ CLONE_BOOT_ID=$(echo "$VOLUME_DATA" | jq -r '
     | .volumeID
 ' | paste -sd ',' - || true | sed 's/^,\|,$//')
 
-# 2. Extract Data Volume ID(s): Filters for bootable == false.
+# 2. Extract Data Volume ID(s)
 CLONE_DATA_IDS=$(echo "$VOLUME_DATA" | jq -r '
     .volumes | 
     if type == "array" then .[] else empty end
@@ -91,11 +88,16 @@ if [[ -z "$ALL_CLONE_IDS" ]]; then
     exit 0
 fi
 
-# Determine the time reference for the snapshot search (Uses the corrected JSON structure)
-# FIX: Safely retrieve the name of the first volume in the array for timestamp extraction.
-VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumes.name' 2>/dev/null || echo "")
+# FIX: Safely retrieve the name of the first clone volume for timestamp extraction.
+VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
+    .volumes | 
+    if type == "array" then . else empty end
+    | select(.name | startswith("clone-CLONE-RESTORE-")) 
+    | .name 
+' 2>/dev/null || true)
 
-# FIX: Corrected regex to ensure the 12 digits are captured in BASH_REMATCH[1].
+# Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name based on the naming convention.
+SNAPSHOT_TIME_REF=""
 if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
@@ -151,14 +153,12 @@ fi
 
 if [[ -n "$CLONE_DATA_IDS" ]]; then
     echo "2. Detaching Data Volume(s) first: $CLONE_DATA_IDS"
-    # Use bulk-detach command [10]
-    # FIX: Changed 'False' to '=False' to prevent shell parsing errors.
+    # FIX: Corrected syntax to prevent shell parsing errors.
     ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary=False || echo "Error initiating bulk detach for data volumes."
 
     ITERATIONS=0
     while [[ $ITERATIONS -lt $MAX_DETACH_ITERATIONS ]]; do 
         # Check attached volumes list (filter for non-bootable volumes)
-        # Note: We use LPAR_NAME here as detach action confirms the instance is targeted.
         ATTACHED_DATA_VOLUMES=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumes[] | select(.bootable == false) | .volumeID] | join(",")' 2>/dev/null | grep -F -- "$CLONE_DATA_IDS" || true)
 
         if [[ -z "$ATTACHED_DATA_VOLUMES" ]]; then
@@ -212,26 +212,32 @@ fi
 # ----------------------------------------------------------------
 # PHASE 4: Snapshot Discovery and Deletion
 # ----------------------------------------------------------------
-if [[ -n "$SNAPSHOT_TIME_REF" ]]; then
-    TARGET_SNAPSHOT_NAME="TMP_SNAP_${SNAPSHOT_TIME_REF}"
-    echo "4. Searching for Snapshot matching name: ${TARGET_SNAPSHOT_NAME}..."
+if [[ -n "$CLONE_DATA_IDS" ]]; then
+    echo "2. Detaching Data Volume(s) first: $CLONE_DATA_IDS"
+    # FIX: Corrected syntax to prevent shell parsing errors.
+    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary=False || echo "Error initiating bulk detach for data volumes."
 
-    SNAPSHOT_LIST=$(ibmcloud pi instance snapshot list --json 2>/dev/null)
+    ITERATIONS=0
+    while [[ $ITERATIONS -lt $MAX_DETACH_ITERATIONS ]]; do 
+        # Check attached volumes list (filter for non-bootable volumes)
+        ATTACHED_DATA_VOLUMES=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumes[] | select(.bootable == false) | .volumeID] | join(",")' 2>/dev/null | grep -F -- "$CLONE_DATA_IDS" || true)
+
+        if [[ -z "$ATTACHED_DATA_VOLUMES" ]]; then
+            echo "SUCCESS: All Data volumes successfully detached."
+            break
+        else
+            echo "Polling data volume detach status. Still attached: $ATTACHED_DATA_VOLUMES. Waiting $POLL_INTERVAL seconds..."
+            sleep "$POLL_INTERVAL"
+            ITERATIONS=$((ITERATIONS + 1))
+        fi
+    done
     
-    # Filter the list for the snapshot matching the constructed name and extract its ID
-    SNAPSHOT_ID=$(echo "$SNAPSHOT_LIST" | jq -r ".pvmInstanceSnapshots[] | select(.name == \"$TARGET_SNAPSHOT_NAME\") | .snapshotID" || true)
-
-    if [[ -n "$SNAPSHOT_ID" ]]; then
-        echo "Found matching Snapshot ID ($SNAPSHOT_ID). Deleting now."
-        # Use ibmcloud pi instance snapshot delete [19, 20]
-        ibmcloud pi instance snapshot delete "$SNAPSHOT_ID" || {
-            echo "WARNING: Failed to delete snapshot $SNAPSHOT_ID. Manual deletion may be required."
-        }
-    else
-        echo "Warning: No snapshot found matching name: $TARGET_SNAPSHOT_NAME. Skipping snapshot deletion."
+    if [[ $ITERATIONS -ge $MAX_DETACH_ITERATIONS ]]; then
+        echo "FATAL: Data volume detachment timed out. Cannot proceed safely."
+        exit 1
     fi
 else
-    echo "4. Skipping Snapshot Discovery: No time reference could be established."
+    echo "2. Skipping Data Volume Detachment: No data volumes identified."
 fi
 
 # ----------------------------------------------------------------
