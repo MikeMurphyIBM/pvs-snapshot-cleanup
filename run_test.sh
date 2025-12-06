@@ -11,7 +11,7 @@ LPAR_NAME="empty-ibmi-lpar"
 JOB_SUCCESS=0
 
 ---------------------------------------------------------
-Step 1 of 7:  IBM Cloud Authentication
+echo "Step 1 of 7:  IBM Cloud Authentication"
 ---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"  
@@ -44,7 +44,7 @@ echo "--- Part 1 of 7 Complete ---"
 echo ""
 
 ---------------------------------------------------------
-Step 2 of 7:  Storage Volume Identification (for after detachment)
+echo "Step 2 of 7:  Storage Volume Identification (for after detachment)"
 ---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Storage Volume Identificaton---"
@@ -88,7 +88,7 @@ echo ""
 
 
 ---------------------------------------------------------
-Part 3 of 7:  Snapshot Identification
+echo "Part 3 of 7:  Snapshot Identification"
 ---------------------------------------------------------
 
 # --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
@@ -151,7 +151,7 @@ echo "--- Part 3 of 7 Complete ---"
 echo ""
 
 ---------------------------------------------------------
-Part 4 of 7:  LPAR Shutdown
+echo "Part 4 of 7:  LPAR Shutdown"
 ---------------------------------------------------------
 
 # Exit immediately if a command exits with a non-zero status
@@ -259,7 +259,7 @@ echo "Part 4 of 7 Complete"
 
 
 ---------------------------------------------------------
-Part 5 of 7:  Detaching Boot and Storage Volumes
+echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
 ---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
@@ -301,7 +301,7 @@ echo "Volume detachment finalized, ready for deletion."
 echo "Part 5 of 7 complete"
 
 ---------------------------------------------------------
-Part 6 of 7:  Storage Volume Deletion
+echo "Part 6 of 7:  Storage Volume Deletion"
 ---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
@@ -399,7 +399,7 @@ echo "--- Part 5 of 7 Complete ---"
 echo ""
 
 ---------------------------------------------------------
-  Part 7 of 7:  Snapshot Deletion
+echo "Part 6 of 7:  Snapshot Deletion"
 ---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
