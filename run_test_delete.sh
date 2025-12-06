@@ -10,9 +10,9 @@ CLOUD_INSTANCE_ID="cc84ef2f-babc-439f-8594-571ecfcbe57a"
 LPAR_NAME="empty-ibmi-lpar"
 JOB_SUCCESS=0
 
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Step 1 of 7:  IBM Cloud Authentication"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"  
 
@@ -43,9 +43,9 @@ echo "Authentication and targeting successful."
 echo "--- Part 1 of 7 Complete ---"
 echo ""
 
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Step 2 of 7:  Storage Volume Identification (for after detachment)"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Storage Volume Identificaton---"
 
@@ -87,9 +87,9 @@ echo "--- Part 2 of 7 Complete ---"
 echo ""
 
 
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Part 3 of 7:  Snapshot Identification"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 # --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
@@ -150,9 +150,9 @@ echo "--------------------------------------------"
 echo "--- Part 3 of 7 Complete ---"
 echo ""
 
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Part 4 of 7:  LPAR Shutdown"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 # Exit immediately if a command exits with a non-zero status
 set -e
@@ -222,24 +222,26 @@ check_volume_deleted() {
 
 echo "--- Initiating LPAR Shutdown ---"
 
-
-CURRENT_STATUS=$(get_lpar_status)
+CURRENT_STATUS=$(get_lpar_status | tr '[:lower:]' '[:upper:]')
 echo "Initial LPAR status: $CURRENT_STATUS"
 
-if [[ "$CURRENT_STATUS" == "Active" || "$CURRENT_STATUS" == "Warning" ]]; then
+# Anything that is NOT OFF means shutdown is required
+if [[ "$CURRENT_STATUS" != "SHUTOFF" && "$CURRENT_STATUS" != "OFF" ]]; then
     echo "Shutdown required. Sending immediate shutdown..."
-    
+
     if ! ibmcloud pi ins act "$LPAR_NAME" --operation immediate-shutdown; then
         echo "Immediate shutdown failed. Attempting graceful shutdown..."
-        
+
         if ! ibmcloud pi ins act "$LPAR_NAME" --operation stop; then
             echo "Shutdown commands failed. Exiting."
             exit 1
         fi
     fi
 else
-    echo "Skipping shutdown, LPAR state is already: $CURRENT_STATUS"
+    echo "Skipping shutdown — LPAR already off: $CURRENT_STATUS"
 fi
+
+
 
 # *** RECHECK STATUS ***
 sleep 10
@@ -257,10 +259,9 @@ fi
 echo "LPAR verified ready for volume operations."
 echo "Part 4 of 7 Complete"
 
-
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
 
@@ -300,9 +301,9 @@ fi
 echo "Volume detachment finalized, ready for deletion."
 echo "Part 5 of 7 complete"
 
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Part 6 of 7:  Storage Volume Deletion"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
 
@@ -398,9 +399,9 @@ echo "Volume deletion verification phase complete."
 echo "--- Part 6 of 7 Complete ---"
 echo ""
 
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Part 7 of 7:  Snapshot Deletion"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 
@@ -482,9 +483,9 @@ JOB_SUCCESS=1
 echo "Job Success Status: $JOB_SUCCESS"
 
 
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 echo "Part 8: (Optional) LPAR Deletion"
-echo "---------------------------------------------------------"
+#--------------------------------------------------------------
 
 
 # Honor execution flag passed in from environment variables
