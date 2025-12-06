@@ -119,6 +119,38 @@ if [[ "$LPAR_STATUS" != "SHUTOFF" ]]; then
     
     # Use immediate-shutdown operation (hard stop) [12, 13]
     ibmcloud pi instance action "$LPAR_NAME" --operation immediate-shutdown || echo "Warning: Failed to initiate immediate-shutdown."
+
+    # Define maximum wait time (5 minutes) and check interval
+MAX_WAIT=300
+INTERVAL=10
+CURRENT_WAIT=0
+
+echo "Waiting for LPAR $LPAR_NAME to reach SHUTOFF state (Max $MAX_WAIT seconds)..."
+
+while [[ "$CURRENT_WAIT" -lt "$MAX_WAIT" ]]; do
+    # Fetch the current status of the instance. The ibmcloud pi instance get command
+    # provides details on the PVM instance [5].
+    STATUS=$(ibmcloud pi instance get "$LPAR_NAME" --json | jq -r .status)
+
+    if [[ "$STATUS" == "SHUTOFF" ]]; then
+        echo "SUCCESS: LPAR $LPAR_NAME is SHUTOFF. Proceeding to volume detachment."
+        break
+    elif [[ "$STATUS" == "ACTIVE" || "$STATUS" == "SHUTTING_DOWN" ]]; then
+        echo "Current status: $STATUS. Waiting $INTERVAL seconds..."
+        sleep "$INTERVAL"
+        CURRENT_WAIT=$((CURRENT_WAIT + INTERVAL))
+    else
+        # Handle unexpected intermediate states gracefully
+        echo "Warning: Current status: $STATUS. Waiting $INTERVAL seconds..."
+        sleep "$INTERVAL"
+        CURRENT_WAIT=$((CURRENT_WAIT + INTERVAL))
+    fi
+done
+
+if [[ "$STATUS" != "SHUTOFF" ]]; then
+    echo "FATAL: LPAR shutdown timed out after $MAX_WAIT seconds. Volumes cannot be safely detached or deleted."
+    exit 1
+fi
     
     # Polling loop
     ITERATIONS=0
