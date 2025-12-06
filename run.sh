@@ -46,7 +46,7 @@ echo "Found Instance ID: $LPAR_ID"
 
 # --- MODIFIED STEP: Identify attached volumes using Instance ID ---
 echo "0.3. Identifying attached volumes using Instance ID: $LPAR_ID"
-VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_ID" --json 2>/dev/null || 
+VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_ID" --json 2>/dev/null || echo "{}")
 
 # Check if volume data is empty/malformed
 if [[ "$VOLUME_DATA" == "{}" || "$VOLUME_DATA" == "[]" ]]; then
@@ -104,7 +104,6 @@ if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
 else
     echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
 fi
-
 
 # ----------------------------------------------------------------
 # PHASE 1: Immediate Shutdown and Poll for SHUTOFF (Skipping graceful stop)
