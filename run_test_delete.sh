@@ -12,7 +12,7 @@ JOB_SUCCESS=0
 
 echo "---------------------------------------------------------"
 echo "Step 1 of 7:  IBM Cloud Authentication"
-echo "-----------------------------------------------------------"
+echo "---------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"  
 
