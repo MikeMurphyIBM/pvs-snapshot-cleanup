@@ -90,7 +90,7 @@ if [[ -z "$ALL_CLONE_IDS" ]]; then
 fi
 
 # FIX: Safely retrieve the name of the first clone volume for timestamp extraction.
-VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
+VOLUME_ID=$(echo "$VOLUME_DATA" | jq -r '
     .volumes[] | 
     if .name | startswith("clone-CLONE-RESTORE-") then .name else empty end 
 ' 2>/dev/null | head -n 1 || echo "")
@@ -99,12 +99,12 @@ VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
 SNAPSHOT_TIME_REF=""
 # FIX: Use correct Bash regex syntax to capture exactly 12 digits.
 # Assuming $VOLUME_NAME looks like 'clone-CLONE-RESTORE-202512060039-2'
-if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
+if [[ "$VOLUME_ID" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
     # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
-    echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
+    echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_ID'."
 fi
 
 
