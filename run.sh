@@ -84,10 +84,6 @@ ALL_CLONE_IDS=$(echo "$ALL_CLONE_IDS" | sed 's/^,\|,$//;s/,,/,/g')
 echo "Discovered Boot ID: ${CLONE_BOOT_ID:-N/A}"
 echo "Discovered Data IDs: ${CLONE_DATA_IDS:-N/A}"
 
-if [[ -z "$ALL_CLONE_IDS" ]]; then
-    echo "No clone volumes detected. Exiting cleanup successfully."
-    exit 0
-fi
 
 # FIX: Safely retrieve the name of the first clone volume for timestamp extraction.
 VOLUME_ID=$(echo "$VOLUME_DATA" | jq -r '
@@ -245,31 +241,59 @@ fi
 # PHASE 4: Snapshot Discovery and Deletion
 # ----------------------------------------------------------------
 
+echo "4. Searching for remnant snapshots to clean up based on naming pattern."
+
+# 1. Retrieve all snapshots data.
+SNAPSHOT_DATA_JSON=$(ibmcloud pi instance snapshot list --json 2>/dev/null)
+
+# 2. Use jq to find the name of the first snapshot starting with the cleanup prefix.
+TARGET_SNAPSHOT_NAME_FULL=$(echo "$SNAPSHOT_DATA_JSON" | jq -r '
+    .snapshots[] | 
+    select(.name | startswith("TMP_SNAP_")) | 
+    .name 
+' 2>/dev/null | head -n 1)
+
+SNAPSHOT_TIME_REF=""
+
+if [[ -n "$TARGET_SNAPSHOT_NAME_FULL" ]]; then
+    # 3. Extract the 12-digit timestamp (YYYYMMDDHHMM) from the full name using regex.
+    if [[ "$TARGET_SNAPSHOT_NAME_FULL" =~ TMP_SNAP_([3-11]{12}) ]]; then
+        # BASH_REMATCH[3] holds the content of the first capture group (the 12 digits).
+        SNAPSHOT_TIME_REF="${BASH_REMATCH[3]}"
+        TARGET_SNAPSHOT_NAME="TMP_SNAP_${SNAPSHOT_TIME_REF}"
+        echo "Extracted unique timestamp reference: $SNAPSHOT_TIME_REF"
+        echo "Found potential target snapshot: $TARGET_SNAPSHOT_NAME"
+    else
+        echo "Warning: Could not extract YYYYMMDDHHMM timestamp from snapshot name '$TARGET_SNAPSHOT_NAME_FULL'."
+    fi
+else
+    echo "4. Skipping Snapshot Deletion: No snapshots matching the prefix 'TMP_SNAP_' found in the workspace."
+fi
+
 if [[ -n "$SNAPSHOT_TIME_REF" ]]; then
-    # Construct the expected snapshot name using the extracted timestamp
-    TARGET_SNAPSHOT_NAME="TMP_SNAP_$SNAPSHOT_TIME_REF"
+    # Proceed only if a valid time reference was extracted.
     echo "4. Attempting to locate and delete snapshot: $TARGET_SNAPSHOT_NAME"
 
-    # Query all snapshots and use jq to find the exact ID matching the unique name
-    SNAPSHOT_ID_TO_DELETE=$(ibmcloud pi instance snapshot list --json | \
+    # Query the snapshot JSON again (or filter the existing variable) to find the exact ID matching the unique name
+    SNAPSHOT_ID_TO_DELETE=$(echo "$SNAPSHOT_DATA_JSON" | \
         jq -r ".snapshots[] | select(.name == \"$TARGET_SNAPSHOT_NAME\") | .snapshotID")
 
     if [[ -n "$SNAPSHOT_ID_TO_DELETE" ]]; then
         echo "Found target Snapshot ID: $SNAPSHOT_ID_TO_DELETE. Deleting..."
         
-        # Deleting the corresponding snapshot is standard cleanup practice in PowerVS environments
+        # Deleting the corresponding snapshot is standard cleanup practice in PowerVS environments [Q, 39, 528]
+        # Note: $LPAR_ID is technically irrelevant here for snapshot deletion, but retained if your original script demands it.
         ibmcloud pi instance snapshot delete "$LPAR_ID" --snapshot "$SNAPSHOT_ID_TO_DELETE" || {
             echo "ERROR: Failed to delete snapshot $TARGET_SNAPSHOT_NAME. Manual cleanup required."
             exit 1
         }
         echo "SUCCESS: Snapshot $TARGET_SNAPSHOT_NAME deleted."
     else
-        echo "Warning: Target snapshot $TARGET_SNAPSHOT_NAME not found. Skipping snapshot cleanup."
+        echo "Warning: Target snapshot $TARGET_SNAPSHOT_NAME not found (ID lookup failed). Skipping snapshot cleanup."
     fi
 else
-    echo "4. Skipping Snapshot Deletion: No valid timestamp extracted (SNAPSHOT_TIME_REF is empty)."
+    echo "Skipping further snapshot operations."
 fi
-
 # ----------------------------------------------------------------
 # PHASE 5: Delete Volumes (Boot and Data)
 # ----------------------------------------------------------------
