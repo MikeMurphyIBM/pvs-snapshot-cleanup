@@ -97,13 +97,12 @@ VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
 
 # Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name based on the naming convention.
 SNAPSHOT_TIME_REF=""
-# FIX: Corrected regex syntax to match the prefix and CAPTURE EXACTLY 12 DIGITS (0-9).
+# FIX: Use correct Bash regex syntax to capture exactly 12 digits (allowing 0-9).
 if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
     # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
-    # The variable VOLUME_NAME now correctly contains the full name, resolving the initial error
     echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
 fi
 
@@ -214,32 +213,29 @@ fi
 # ----------------------------------------------------------------
 # PHASE 4: Snapshot Discovery and Deletion
 # ----------------------------------------------------------------
-if [[ -n "$CLONE_DATA_IDS" ]]; then
-    echo "2. Detaching Data Volume(s) first: $CLONE_DATA_IDS"
-    # FIX: Corrected syntax to prevent shell parsing errors.
-    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary=False || echo "Error initiating bulk detach for data volumes."
+if [[ -n "$SNAPSHOT_TIME_REF" ]]; then
+    # Construct the expected snapshot name using the extracted timestamp
+    TARGET_SNAPSHOT_NAME="TMP_SNAP_$SNAPSHOT_TIME_REF"
+    echo "4. Attempting to locate and delete snapshot: $TARGET_SNAPSHOT_NAME"
 
-    ITERATIONS=0
-    while [[ $ITERATIONS -lt $MAX_DETACH_ITERATIONS ]]; do 
-        # Check attached volumes list (filter for non-bootable volumes)
-        ATTACHED_DATA_VOLUMES=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumes[] | select(.bootable == false) | .volumeID] | join(",")' 2>/dev/null | grep -F -- "$CLONE_DATA_IDS" || true)
+    # Use 'ibmcloud pi volume snapshot list' [13, 14] and jq to find snapshot ID by exact name
+    SNAPSHOT_ID_TO_DELETE=$(ibmcloud pi volume snapshot list --json | \
+        jq -r ".snapshots[] | select(.name == \"$TARGET_SNAPSHOT_NAME\") | .snapshotID")
 
-        if [[ -z "$ATTACHED_DATA_VOLUMES" ]]; then
-            echo "SUCCESS: All Data volumes successfully detached."
-            break
-        else
-            echo "Polling data volume detach status. Still attached: $ATTACHED_DATA_VOLUMES. Waiting $POLL_INTERVAL seconds..."
-            sleep "$POLL_INTERVAL"
-            ITERATIONS=$((ITERATIONS + 1))
-        fi
-    done
-    
-    if [[ $ITERATIONS -ge $MAX_DETACH_ITERATIONS ]]; then
-        echo "FATAL: Data volume detachment timed out. Cannot proceed safely."
-        exit 1
+    if [[ -n "$SNAPSHOT_ID_TO_DELETE" ]]; then
+        echo "Found target Snapshot ID: $SNAPSHOT_ID_TO_DELETE. Deleting..."
+        
+        # Use 'ibmcloud pi instance snapshot delete' [15, 16]
+        ibmcloud pi instance snapshot delete "$CLONE_BOOT_ID" --snapshot "$SNAPSHOT_ID_TO_DELETE" || {
+            echo "ERROR: Failed to delete snapshot $TARGET_SNAPSHOT_NAME. Manual cleanup required."
+            exit 1
+        }
+        echo "SUCCESS: Snapshot $TARGET_SNAPSHOT_NAME deleted."
+    else
+        echo "Warning: Target snapshot $TARGET_SNAPSHOT_NAME not found. Skipping snapshot cleanup."
     fi
 else
-    echo "2. Skipping Data Volume Detachment: No data volumes identified."
+    echo "4. Skipping Snapshot Deletion: No valid timestamp extracted (SNAPSHOT_TIME_REF is empty)."
 fi
 
 # ----------------------------------------------------------------
