@@ -59,13 +59,12 @@ if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; the
 fi
 
 # Extract Boot Volume ID (where "bootVolume" == true)
-BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootVolume == true) | .volumeID')
+# NOTE: The filter now starts with .volumes to navigate the JSON structure.
+BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == true) | .volumeID')
 
 # Extract Data Volume IDs (where "bootVolume" == false)
-# jq extracts IDs, paste joins them with commas for cleaner output
-DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
-
-
+# NOTE: The filter now starts with .volumes to navigate the JSON structure.
+DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
 
 
 # Check if BOOT_VOL was found (critical for rollback operation)
