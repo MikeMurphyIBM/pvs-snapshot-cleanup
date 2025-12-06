@@ -222,11 +222,11 @@ check_volume_deleted() {
 
 echo "--- Initiating LPAR Shutdown ---"
 
-# Normalize the returned status to uppercase
+# Normalize the status returned
 CURRENT_STATUS=$(get_lpar_status | tr '[:lower:]' '[:upper:]')
 echo "Initial LPAR status: $CURRENT_STATUS"
 
-# If status is anything OTHER than OFF or SHUTOFF → a shutdown is needed
+# Shutdown is needed whenever LPAR is NOT shutoff/off
 if [[ "$CURRENT_STATUS" != "SHUTOFF" && "$CURRENT_STATUS" != "OFF" ]]; then
     echo "Shutdown required. Sending immediate shutdown..."
 
@@ -239,10 +239,9 @@ if [[ "$CURRENT_STATUS" != "SHUTOFF" && "$CURRENT_STATUS" != "OFF" ]]; then
         fi
     fi
 else
-    echo "Skipping shutdown — LPAR already off: $CURRENT_STATUS"
+    echo "Skipping shutdown — LPAR already powered off: $CURRENT_STATUS"
 fi
 
-# Allow time for transition
 sleep 10
 
 UPDATED_STATUS=$(get_lpar_status | tr '[:lower:]' '[:upper:]')
@@ -252,12 +251,11 @@ if [[ "$UPDATED_STATUS" != "SHUTOFF" && "$UPDATED_STATUS" != "OFF" ]]; then
     echo "LPAR still shutting down — waiting..."
 
     wait_for_status 600 "SHUTOFF" || {
-        echo "WARNING: Shutdown not confirmed after timeout."
+        echo "WARNING: LPAR did not fully reach SHUTOFF state — continuing cautiously."
     }
 fi
 
 echo "LPAR verified ready for volume operations."
-echo "Part 4 of 7 Complete"
 
 #--------------------------------------------------------------
 echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
