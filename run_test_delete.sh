@@ -395,7 +395,7 @@ if [[ -n "$DATA_VOLS" ]]; then
 fi
 
 echo "Volume deletion verification phase complete."
-echo "--- Part 5 of 7 Complete ---"
+echo "--- Part 6 of 7 Complete ---"
 echo ""
 
 echo "---------------------------------------------------------"
@@ -433,9 +433,13 @@ echo "Initiating deletion for Snapshot ID: $MATCHING_SNAPSHOT_ID"
 
 # The command to delete a snapshot is part of the deprecated 'ibmcloud pi snapshot' family,
 # replaced by 'ibmcloud pi instance snapshot delete'.
-ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID" || {
-    echo "Warning: Command to initiate deletion of $MATCHING_SNAPSHOT_ID returned a non-zero code."
-}
+echo "Initiating deletion for Snapshot ID: $MATCHING_SNAPSHOT_ID"
+
+if ! ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID"; then
+    echo "ERROR: Could not start snapshot deletion for $MATCHING_SNAPSHOT_ID"
+    exit 7
+fi
+
 
 # --- 3. Verification Loop ---
 CURRENT_TIME=0
@@ -443,27 +447,38 @@ echo "Waiting up to ${SNAPSHOT_CHECK_MAX_TIME} seconds for snapshot deletion con
 
 while [ "$CURRENT_TIME" -lt "$SNAPSHOT_CHECK_MAX_TIME" ]; do
     if check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
-        echo "Snapshot $MATCHING_SNAPSHOT_ID successfully deleted (Resource not found)."
-        SNAPSHOT_DELETED=0
+        echo "Snapshot $MATCHING_SNAPSHOT_ID successfully deleted."
         break
     fi
 
-    # Pause execution before checking again
     sleep "$SLEEP_INTERVAL"
     CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
-    echo "Checking status of $MATCHING_SNAPSHOT_ID (Time elapsed: ${CURRENT_TIME}s)"
 
-    if [ "$CURRENT_TIME" -ge "$SNAPSHOT_CHECK_MAX_TIME" ] && [ "$SNAPSHOT_DELETED" -ne 0 ]; then
-        echo "Error: Snapshot $MATCHING_SNAPSHOT_ID could not be confirmed deleted within ${SNAPSHOT_CHECK_MAX_TIME} seconds."
-        exit 7 # Failure to confirm final cleanup step
-    fi
+    echo "Checking status... (${CURRENT_TIME}s elapsed)"
 done
+
+if ! check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
+    echo "ERROR: Snapshot $MATCHING_SNAPSHOT_ID still exists after ${SNAPSHOT_CHECK_MAX_TIME} seconds."
+    exit 7
+fi
+
+# If execution reached this point, all operations succeeded
+JOB_SUCCESS=1
 
 echo "--- Cleanup and Rollback Operation Complete.  Partition is ready for next Backup Operation ---"
 echo "Job Success Status: $JOB_SUCCESS"
 
-# If execution reached this point, all operations succeeded
-JOB_SUCCESS=1
+echo ""
+echo "--------------------------------------------"
+echo "Cleanup Summary:"
+echo "--------------------------------------------"
+echo "LPAR Shutdown        : Completed"
+echo "Volume Detach/Delete : Completed"
+echo "Snapshot Deleted     : Completed"
+echo "LPAR Ready For Backup: Yes"
+echo "--------------------------------------------"
+echo ""
+
 
 
 echo "---------------------------------------------------------"
@@ -492,33 +507,35 @@ fi
 
 echo "Initiating permanent deletion for LPAR: $LPAR_NAME"
 
-# Force-delete the instance (no prompt)
-ibmcloud pi ins delete "$LPAR_NAME" -f || {
-    echo "Warning: Delete command returned non-zero exit code."
-    echo "Proceeding with verification — deletion may still be in progress."
-}
-
-CURRENT_TIME=0
-LPAR_DELETED=1
+if ! ibmcloud pi ins delete "$LPAR_NAME" -f; then
+    echo "ERROR: IBM Cloud rejected LPAR deletion request."
+    exit 8
+fi
 
 echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion..."
 echo "Checking every ${CHECK_INTERVAL}s..."
 
 while [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; do
-    
     if ! check_instance_exists; then
         echo "LPAR $LPAR_NAME confirmed deleted."
-        LPAR_DELETED=0
         break
     fi
 
     echo "LPAR still exists. Time elapsed: ${CURRENT_TIME}s — retrying in ${CHECK_INTERVAL}s..."
+    
     sleep "$CHECK_INTERVAL"
     CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
 done
 
+
 if [ "$LPAR_DELETED" -ne 0 ]; then
     echo "ERROR: LPAR $LPAR_NAME was not fully deleted within ${DELETE_CHECK_MAX_TIME}s."
+    exit 8
+fi
+
+# After wait loop, final check:
+if check_instance_exists; then
+    echo "ERROR: LPAR $LPAR_NAME still exists after $DELETE_CHECK_MAX_TIME seconds."
     exit 8
 fi
 
