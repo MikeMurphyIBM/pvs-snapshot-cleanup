@@ -462,11 +462,8 @@ if ! check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
     exit 7
 fi
 
-# If execution reached this point, all operations succeeded
-JOB_SUCCESS=1
 
 echo "--- Cleanup and Rollback Operation Complete.  Partition is ready for next Backup Operation ---"
-echo "Job Success Status: $JOB_SUCCESS"
 
 echo ""
 echo "--------------------------------------------"
@@ -479,11 +476,30 @@ echo "LPAR Ready For Backup: Yes"
 echo "--------------------------------------------"
 echo ""
 
+# If execution reached this point, all operations succeeded
+JOB_SUCCESS=1
+
+echo "Job Success Status: $JOB_SUCCESS"
 
 
 echo "---------------------------------------------------------"
 echo "Part 8: (Optional) LPAR Deletion"
 echo "---------------------------------------------------------"
+
+
+# Honor execution flag passed in from environment variables
+EXECUTE_LPAR_DELETE="${EXECUTE_LPAR_DELETE:-false}"
+
+if [[ "$EXECUTE_LPAR_DELETE" != "true" ]]; then
+    echo "Skipping LPAR deletion because EXECUTE_LPAR_DELETE=$EXECUTE_LPAR_DELETE"
+    JOB_SUCCESS=1
+    echo "--- Cleanup Complete ---"
+    echo "Final Job Success Status: $JOB_SUCCESS"
+    exit 0
+fi
+
+echo "User parameter EXECUTE_LPAR_DELETE=true — proceeding with DELETE..."
+
 
 echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
 
