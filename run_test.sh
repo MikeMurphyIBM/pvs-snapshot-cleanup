@@ -11,10 +11,10 @@ LPAR_NAME="empty-ibmi-lpar"
 JOB_SUCCESS=0
 
 #---------------------------------------------------------
-#  Part 1:  Authentication and Volume Identification
+#  Part 1:  Authentication
 #---------------------------------------------------------
 
-echo "--- PowerVS Cleanup and Rollback Operation - Authentication and Volume Identification ---"
+echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"
 
 # --- 1. Authenticate and Target Resources ---
 echo "1. Authenticating to IBM Cloud and targeting PowerVS instance..."
@@ -40,6 +40,13 @@ ibmcloud pi workspace target "$PVS_CRN" > /dev/null 2>&1 || {
 
 echo "Authentication and targeting successful."
 
+#---------------------------------------------------------
+#  Part 2:  Volume and Snapshot Identification
+#---------------------------------------------------------
+
+
+echo echo "--- PowerVS Cleanup and Rollback Operation - Volume and Snapshot Identificaton---"
+
 # --- 2. Identify Attached Volumes ---
 echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
 
@@ -48,24 +55,20 @@ echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
 VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
 
 # Debugging step: Check the raw JSON output captured in the variable
-echo "Raw VOLUME_DATA received:"
-echo "$VOLUME_DATA"
-# Expected to fail here if data is bad, allowing inspection of the output above
+#echo "Raw VOLUME_DATA received:"
+#echo "$VOLUME_DATA"
 
 # If volume data retrieval failed or returned empty results
-if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; then
+if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]')" ]; then
     echo "Error: Could not retrieve volume data or no volumes found for $LPAR_NAME. Exiting."
     exit 1
 fi
 
 # Extract Boot Volume ID (where "bootVolume" == true)
-# NOTE: The filter now starts with .volumes to navigate the JSON structure.
 BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == true) | .volumeID')
 
 # Extract Data Volume IDs (where "bootVolume" == false)
-# NOTE: The filter now starts with .volumes to navigate the JSON structure.
 DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
-
 
 # Check if BOOT_VOL was found (critical for rollback operation)
 if [ -z "$BOOT_VOL" ]; then
@@ -77,39 +80,29 @@ fi
 echo "Boot Volume: $BOOT_VOL"
 echo "Data Volume(s): $DATA_VOLS"
 
-echo "--- Part 1 Complete ---"
+echo "--- Snapshot Identification ---"
 echo ""
 
-#---------------------------------------------------------
-#  Part 2:  Snapshot Identification
-#---------------------------------------------------------
-
-# --- Assuming BOOT_VOL variable is defined from Part 1 ---
-
+# --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
 
-# Check if BOOT_VOL variable is available (safety check)
-if [[ -z "$BOOT_VOL" ]]; then
-    echo "ERROR: BOOT_VOL variable is missing from Part 1 context. Cannot proceed."
+# 1. Extract the full volume name string based on the known Boot Volume ID
+BOOT_VOL_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.volumeID == "'"$BOOT_VOL"'") | .name')
+
+echo "Fetching metadata for Volume ID: $BOOT_VOL..."
+echo "Extracted volume name: $BOOT_VOL_NAME"
+
+# 2. Extract the 12-digit timestamp (YYYYMMDDhhmm) using grep for robust pattern matching
+# The volume name structure ("clone-CLONE-RESTORE-202512051232-2") contains the critical timestamp
+TIMESTAMP=$(echo "$BOOT_VOL_NAME" | grep -oE '\d{12}')
+
+# If extraction failed, exit with the correlation error
+if [ -z "$TIMESTAMP" ]; then
+    echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
     exit 1
 fi
 
-echo "Fetching metadata for Volume ID: $BOOT_VOL..."
-# Retrieve volume details in JSON format. Suppress errors but exit on critical failure.
-BOOT_VOL_JSON=$(ibmcloud pi vol get "$BOOT_VOL" --json 2>/dev/null)
-
-# Check if volume data retrieval was successful (checking for null or empty content)
-if [ -z "$BOOT_VOL_JSON" ] || [ "$(echo "$BOOT_VOL_JSON" | jq -r '.volumeID')" == "null" ]; then
-    echo "ERROR: Could not retrieve valid metadata for volume $BOOT_VOL. Exiting."
-    exit 2
-fi
-
-# Extract timestamp from volume name
-TS=$(echo "$BOOT_VOL_JSON" | jq -r '
-    .name | capture("(?<ts>[1-9]{12})").ts
-')
-
-echo "Extracted timestamp: $TS"
+echo "Extracted timestamp: $TIMESTAMP"
 
 if [[ -z "$TS" ]] || [[ "$TS" == "null" ]]; then
     echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
