@@ -10,9 +10,9 @@ CLOUD_INSTANCE_ID="cc84ef2f-babc-439f-8594-571ecfcbe57a"
 LPAR_NAME="empty-ibmi-lpar"
 JOB_SUCCESS=0
 
----------------------------------------------------------
+echo---------------------------------------------------------
 echo "Step 1 of 7:  IBM Cloud Authentication"
----------------------------------------------------------
+echo---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"  
 
@@ -43,9 +43,9 @@ echo "Authentication and targeting successful."
 echo "--- Part 1 of 7 Complete ---"
 echo ""
 
----------------------------------------------------------
+echo"---------------------------------------------------------"
 echo "Step 2 of 7:  Storage Volume Identification (for after detachment)"
----------------------------------------------------------
+echo"---------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Storage Volume Identificaton---"
 
@@ -87,9 +87,9 @@ echo "--- Part 2 of 7 Complete ---"
 echo ""
 
 
----------------------------------------------------------
+echo"---------------------------------------------------------"
 echo "Part 3 of 7:  Snapshot Identification"
----------------------------------------------------------
+echo"---------------------------------------------------------"
 
 # --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
@@ -150,9 +150,9 @@ echo "--------------------------------------------"
 echo "--- Part 3 of 7 Complete ---"
 echo ""
 
----------------------------------------------------------
+echo "---------------------------------------------------------"
 echo "Part 4 of 7:  LPAR Shutdown"
----------------------------------------------------------
+echo "---------------------------------------------------------"
 
 # Exit immediately if a command exits with a non-zero status
 set -e
@@ -258,9 +258,9 @@ echo "LPAR verified ready for volume operations."
 echo "Part 4 of 7 Complete"
 
 
----------------------------------------------------------
+echo "---------------------------------------------------------"
 echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
----------------------------------------------------------
+echo "---------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
 
@@ -300,9 +300,9 @@ fi
 echo "Volume detachment finalized, ready for deletion."
 echo "Part 5 of 7 complete"
 
----------------------------------------------------------
+echo "---------------------------------------------------------"
 echo "Part 6 of 7:  Storage Volume Deletion"
----------------------------------------------------------
+echo "---------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
 
@@ -398,9 +398,9 @@ echo "Volume deletion verification phase complete."
 echo "--- Part 5 of 7 Complete ---"
 echo ""
 
----------------------------------------------------------
+echo "---------------------------------------------------------"
 echo "Part 7 of 7:  Snapshot Deletion"
----------------------------------------------------------
+echo "---------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 
@@ -466,9 +466,9 @@ echo "Job Success Status: $JOB_SUCCESS"
 JOB_SUCCESS=1
 
 
-#---------------------------------------------------------
-echo "Part 8: (Optional) LPAR Deletion
-#---------------------------------------------------------
+echo "---------------------------------------------------------"
+echo "Part 8: (Optional) LPAR Deletion"
+echo "---------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
 
