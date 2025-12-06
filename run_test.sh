@@ -40,12 +40,14 @@ ibmcloud pi workspace target "$PVS_CRN" > /dev/null 2>&1 || {
 
 echo "Authentication and targeting successful."
 
+echo "--- Part 1 Complete ---"
+echo ""
+
 #---------------------------------------------------------
-#  Part 2:  Volume and Snapshot Identification
+#  Part 2:  Storage Volume Identification
 #---------------------------------------------------------
 
-
-echo echo "--- PowerVS Cleanup and Rollback Operation - Volume and Snapshot Identificaton---"
+echo echo "--- PowerVS Cleanup and Rollback Operation - Storage Volume Identificaton---"
 
 # --- 2. Identify Attached Volumes ---
 echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
@@ -80,8 +82,14 @@ fi
 echo "Boot Volume: $BOOT_VOL"
 echo "Data Volume(s): $DATA_VOLS"
 
-echo "--- Snapshot Identification ---"
+
+echo "--- Part 2 Complete ---"
 echo ""
+
+
+#---------------------------------------------------------
+#  Part 3:  Snapshot Identification
+#---------------------------------------------------------
 
 # --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
@@ -139,17 +147,17 @@ echo "Timestamp Match:  $TIMESTAMP"
 echo "--------------------------------------------"
 
 
-echo "--- Part 2 Complete ---"
+echo "--- Part 3 Complete ---"
 echo ""
 
 #---------------------------------------------------------
-#  Part 3:  Shutdown of LPAR
+#  Part 4:  Shutdown of LPAR
 #---------------------------------------------------------
 
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-echo echo "--- PowerVS Cleanup and Rollback Operation - LPAR Shutdown ---"
+echo "--- PowerVS Cleanup and Rollback Operation - LPAR Shutdown ---"
 
 # --- Utility Functions ---
 
@@ -182,6 +190,7 @@ wait_for_status() {
     echo "Error: LPAR failed to reach $target_state within ${max_time} seconds."
     return 1 # Failure
 }
+
 
 # Function to check if volumes are detached
 check_volumes_detached() {
@@ -228,7 +237,7 @@ fi
 
 if [ "$CURRENT_STATUS" != "SHUTOFF" ]; then
     # Wait for the shutoff state if it wasn't already reached
-    wait_for_status 180 "SHUTOFF" || {
+    wait_for_status 600 "SHUTOFF" || {
         echo "LPAR did not reach SHUTOFF state. Proceeding cautiously."
     }
 fi
@@ -236,7 +245,7 @@ fi
 echo "LPAR ready for volume operations."
 
 #---------------------------------------------------------
-#  Part 4:  Detaching Boot and Storage Volumes
+#  Part 5:  Detaching Boot and Storage Volumes
 #---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
@@ -277,7 +286,7 @@ fi
 echo "Volume detachment phase complete."
 
 #---------------------------------------------------------
-#  Part 5:  Volume Deletion
+#  Part 6:  Volume Deletion
 #---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
@@ -297,7 +306,7 @@ echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
 DELETION_CHECK_MAX_TIME=120
 SLEEP_INTERVAL=30
 
-# --- 5a & 5b. Initiate Concurrent Deletion of All Volumes ---
+# --- Initiate Concurrent Deletion of All Volumes ---
 echo "Initiating deletion for Boot Volume: $BOOT_VOL"
 # Initiate delete request for Boot Volume immediately
 ibmcloud pi vol delete "$BOOT_VOL" || echo "Warning: Command to delete $BOOT_VOL returned a non-zero code."
@@ -318,7 +327,7 @@ else
     echo "No data volumes identified for deletion."
 fi
 
-# --- 5c. Verification: Wait for Boot Volume deletion (Max 120s) ---
+# --- Verification: Wait for Boot Volume deletion (Max 120s) ---
 echo "3. Verifying deletion status for Boot Volume: $BOOT_VOL"
 CURRENT_TIME=0
 BOOT_VOL_DELETED=1
@@ -340,7 +349,7 @@ if [ "$BOOT_VOL_DELETED" -ne 0 ]; then
     exit 6 # Critical failure, stopping script
 fi
 
-# --- 5d. Verification: Wait for Data Volumes deletion (Max 120s) ---
+# --- Verification: Wait for Data Volumes deletion (Max 120s) ---
 if [[ -n "$DATA_VOLS" ]]; then
     echo "4. Verifying deletion status for Data Volume(s)..."
     
@@ -375,7 +384,7 @@ echo "--- Part 5 Complete ---"
 echo ""
 
 #---------------------------------------------------------
-#  Part 6:  Snapshot Deletion
+#  Part 7:  Snapshot Deletion
 #---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
