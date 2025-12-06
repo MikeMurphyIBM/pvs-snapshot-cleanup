@@ -95,7 +95,7 @@ VOLUME_ID=$(echo "$VOLUME_DATA" | jq -r '
 SNAPSHOT_TIME_REF=""
 # FIX: Use correct Bash regex syntax to capture exactly 12 digits.
 # Assuming $VOLUME_NAME looks like 'clone-CLONE-RESTORE-202512060039-2'
-if [[ "$VOLUME_ID" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
+if [[ "$VOLUME_ID" =~ clone-CLONE-RESTORE-([1-9]{12}) ]]; then
     # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
