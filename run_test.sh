@@ -55,8 +55,8 @@ echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
 VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
 
 # Debugging step: Check the raw JSON output captured in the variable
-#echo "Raw VOLUME_DATA received:"
-#echo "$VOLUME_DATA"
+echo "Raw VOLUME_DATA received:"
+echo "$VOLUME_DATA"
 
 # If volume data retrieval failed or returned empty results
 if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]')" ]; then
