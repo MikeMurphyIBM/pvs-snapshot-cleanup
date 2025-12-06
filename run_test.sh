@@ -94,17 +94,17 @@ echo "Extracted volume name: $BOOT_VOL_NAME"
 
 # 2. Extract the 12-digit timestamp (YYYYMMDDhhmm) using grep for robust pattern matching
 # The volume name structure ("clone-CLONE-RESTORE-202512051232-2") contains the critical timestamp
-TIMESTAMP=$(echo "$BOOT_VOL_NAME" | grep -oE '\d{14}')
+timestamp=$(echo "$BOOT_VOL_NAME" | grep -oE '\d{12}')
 
 # If extraction failed, exit with the correlation error
-if [ -z "$TIMESTAMP" ]; then
+if [ -z "$timestamp" ]; then
     echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
     exit 1
 fi
 
-echo "Extracted timestamp: $TIMESTAMP"
+echo "Extracted timestamp: $timestamp"
 
-if [[ -z "$TIMESTAMP" ]] || [[ "$TIMESTAMP" == "null" ]]; then
+if [[ -z "$timestamp" ]] || [[ "$timestamp" == "null" ]]; then
     echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
     exit 3
 fi
@@ -119,12 +119,12 @@ if [ "$ALL_SNAPS_JSON" == "[]" ] || [ -z "$(echo "$ALL_SNAPS_JSON" | jq '.[]')" 
 fi
 
 # Find matching snapshot by identifying the timestamp in the snapshot name
-MATCHING_SNAPSHOT_JSON=$(echo "$ALL_SNAPS_JSON" | jq -r --arg ts "$TIMESTAMP" '
+MATCHING_SNAPSHOT_JSON=$(echo "$ALL_SNAPS_JSON" | jq -r --arg ts "$timestamp" '
     .[] | select(.name | test($ts))
 ')
 
 if [[ -z "$MATCHING_SNAPSHOT_JSON" ]]; then
-    echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
+    echo "ERROR: No snapshot found matching timestamp $timestamp in the workspace. Cannot determine rollback target."
     exit 4
 fi
 
@@ -143,7 +143,7 @@ echo "Snapshot Match Found (Rollback Target)"
 echo "Volume ID:        $BOOT_VOL"
 echo "Snapshot ID:      $MATCHING_SNAPSHOT_ID"
 echo "Snapshot Name:    $MATCHING_SNAPSHOT_NAME"
-echo "Timestamp Match:  $TIMESTAMP"
+echo "Timestamp Match:  $timestamp"
 echo "--------------------------------------------"
 
 echo "--- Part 2 Complete ---"
