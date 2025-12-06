@@ -185,63 +185,61 @@ fi
 # PHASE 2: Detach DATA Volume(s) and Poll (Must precede Boot volume detach)
 # ----------------------------------------------------------------
 
-if [[ -n "$CLONE_DATA_IDS" ]]; then
-    echo "2. Detaching Data Volume(s) first: $CLONE_DATA_IDS"
-    # FIX: Corrected syntax to prevent shell parsing errors.
-    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary=False || echo "Error initiating bulk detach for data volumes."
+if [[ -n "$CLONE_DATA_IDS" || -n "$CLONE_BOOT_ID" ]]; then
+    # FIX 1: Updated descriptive output to reflect detachment of all volumes
+    echo "2. Detaching ALL volumes (Data and Boot) from LPAR: $LPAR_NAME"
+    # Bulk detach command remains correct for detaching both volumes simultaneously
+    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --detach-all True --detach-primary True || echo "Error initiating bulk detach for ALL volumes."
+
+    # FIX 2: Combine Boot and Data IDs for comprehensive checking
+    ALL_CRITICAL_IDS="$CLONE_BOOT_ID,$CLONE_DATA_IDS"
 
     ITERATIONS=0
-    while [[ $ITERATIONS -lt $MAX_DETACH_ITERATIONS ]]; do 
-        # Check attached volumes list (filter for non-bootable volumes)
-        ATTACHED_DATA_VOLUMES=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumes[] | select(.bootable == false) | .volumeID] | join(",")' 2>/dev/null | grep -F -- "$CLONE_DATA_IDS" || true)
-
-        if [[ -z "$ATTACHED_DATA_VOLUMES" ]]; then
-            echo "SUCCESS: All Data volumes successfully detached."
+    # Assuming $MAX_DETACH_ITERATIONS and $POLL_INTERVAL are defined globally
+    while [[ $ITERATIONS -lt $MAX_DETACH_ITERATIONS ]]; do
+        ALL_DETACHED=true
+        
+        # Fetch ALL attached volume IDs (Boot and Data), returning a comma-separated list of IDs
+        CURRENT_ATTACHED_VOLUMES=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumes[].volumeID] | join(",")' 2>/dev/null || true)
+        
+        STILL_ATTACHED_CRITICAL_VOLUMES=""
+        
+        # Convert combined IDs string into an array
+        IFS=',' read -r -a ALL_IDS_ARRAY <<< "$ALL_CRITICAL_IDS"
+        
+        # FIX 3: Iterate through every expected critical ID (Boot and Data)
+        for VOL_ID in "${ALL_IDS_ARRAY[@]}"; do
+            # Check if this critical volume ID is still present in the list of currently attached volumes
+            if [[ -n "$VOL_ID" ]] && echo "$CURRENT_ATTACHED_VOLUMES" | grep -q "$VOL_ID"; then
+                ALL_DETACHED=false
+                STILL_ATTACHED_CRITICAL_VOLUMES+="$VOL_ID "
+            fi
+        done
+        
+        if [[ "$ALL_DETACHED" == "true" ]]; then
+            echo "SUCCESS: All critical volumes successfully detached."
             break
         else
-            echo "Polling data volume detach status. Still attached: $ATTACHED_DATA_VOLUMES. Waiting $POLL_INTERVAL seconds..."
+            # Display which specific volumes remain attached
+            echo "Polling detachment status. Still attached: $STILL_ATTACHED_CRITICAL_VOLUMES. Waiting $POLL_INTERVAL seconds..."
             sleep "$POLL_INTERVAL"
             ITERATIONS=$((ITERATIONS + 1))
         fi
     done
     
-    if [[ $ITERATIONS -ge $MAX_DETACH_ITERATIONS ]]; then
-        echo "FATAL: Data volume detachment timed out. Cannot proceed safely."
+    # Final check block ensures FATAL exit if the while loop timed out
+    if [[ "$ALL_DETACHED" != "true" ]]; then
+        echo "FATAL: Volume detachment timed out. Cannot proceed safely."
         exit 1
     fi
 else
-    echo "2. Skipping Data Volume Detachment: No data volumes identified."
+    echo "2. Skipping Volume Detachment: No critical volumes identified."
 fi
 
 # ----------------------------------------------------------------
 # PHASE 3: Detach BOOT Volume and Poll
 # ----------------------------------------------------------------
-if [[ -n "$CLONE_BOOT_ID" ]]; then
-    echo "3. Detaching Boot Volume: $CLONE_BOOT_ID"
-    # Use individual detach command [17, 18]
-    ibmcloud pi instance volume detach "$LPAR_NAME" --volume "$CLONE_BOOT_ID" || echo "Error initiating detach for boot volume."
 
-    ITERATIONS=0
-    while [[ $ITERATIONS -lt $MAX_DETACH_ITERATIONS ]]; do 
-        # Check if the boot volume ID is still listed as attached
-        BOOT_STATUS=$(ibmcloud pi instance volume list "$LPAR_NAME" --json | jq -r '[.volumes[] | select(.bootable == true) | .volumeID] | join(",")' 2>/dev/null | grep -F "$CLONE_BOOT_ID" || true)
-
-        if [[ -z "$BOOT_STATUS" ]]; then
-            echo "SUCCESS: Boot volume $CLONE_BOOT_ID successfully detached."
-            break
-        else
-            echo "Polling boot volume detach status. Still attached. Waiting $POLL_INTERVAL seconds..."
-            sleep "$POLL_INTERVAL"
-            ITERATIONS=$((ITERATIONS + 1))
-        fi
-    done
-    if [[ $ITERATIONS -ge $MAX_DETACH_ITERATIONS ]]; then
-        echo "FATAL: Boot volume detachment timed out. Cannot proceed with deletion."
-        exit 1
-    fi
-else
-    echo "3. Skipping Boot Volume Detachment: No boot volume identified."
-fi
 
 # ----------------------------------------------------------------
 # PHASE 4: Snapshot Discovery and Deletion
