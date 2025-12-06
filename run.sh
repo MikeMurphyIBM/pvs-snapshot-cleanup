@@ -17,7 +17,7 @@ SNAPSHOT_ID=""
 SNAPSHOT_TIME_REF=""
 
 # --- Configuration ---
-POLL_INTERVAL=60 # seconds
+POLL_INTERVAL=120 # seconds
 MAX_POLL_ITERATIONS=20 # Max 20 minutes for LPAR shutdown, adjustment applied later for volume detach
 
 # ================================================================
@@ -86,7 +86,7 @@ echo "Discovered Data IDs: ${CLONE_DATA_IDS:-N/A}"
 
 
 # FIX: Safely retrieve the name of the first clone volume for timestamp extraction.
-VOLUME_ID=$(echo "$VOLUME_DATA" | jq -r '
+VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
     .volumes[] | 
     if .name | startswith("clone-CLONE-RESTORE-") then .name else empty end 
 ' 2>/dev/null | head -n 1 || echo "")
@@ -95,12 +95,12 @@ VOLUME_ID=$(echo "$VOLUME_DATA" | jq -r '
 SNAPSHOT_TIME_REF=""
 # FIX: Use correct Bash regex syntax to capture exactly 12 digits.
 # Assuming $VOLUME_NAME looks like 'clone-CLONE-RESTORE-202512060039-2'
-if [[ "$VOLUME_ID" =~ clone-CLONE-RESTORE-([1-9]{12}) ]]; then
+if [[ "$VOLUME_NAME" =~ clone-CLONE-RESTORE-([1-9]{12}) ]]; then
     # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
-    echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_ID'."
+    echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_INAME'."
 fi
 
 
@@ -118,7 +118,7 @@ if [[ "$LPAR_STATUS" != "SHUTOFF" ]]; then
 
     # Define maximum wait time (10 minutes) and check interval
 MAX_WAIT=600
-INTERVAL=10
+INTERVAL=30
 CURRENT_WAIT=0
 
 echo "Waiting for LPAR $LPAR_NAME to reach SHUTOFF state (Max $MAX_WAIT seconds)..."
