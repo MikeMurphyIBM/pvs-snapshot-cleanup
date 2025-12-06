@@ -104,10 +104,6 @@ fi
 
 echo "Extracted timestamp: $TIMESTAMP"
 
-if [[ -z "$TIMESTAMP" ]] || [[ "$TIMESTAMP" == "null" ]]; then
-    echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
-    exit 3
-fi
 
 echo "Fetching snapshot list across the workspace..."
 # Note: ibmcloud pi instance snapshot ls lists snapshots created within the current workspace context
@@ -119,32 +115,28 @@ if [ "$ALL_SNAPS_JSON" == "[]" ] || [ -z "$(echo "$ALL_SNAPS_JSON" | jq '.[]')" 
 fi
 
 # Find matching snapshot by identifying the timestamp in the snapshot name
-MATCHING_SNAPSHOT_JSON=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
-    .[] | select(.name | test($TIMESTAMP))
-')
+MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
+    .[] | select(.name | test($TIMESTAMP)) | .snapshotID
+' | head -n 1)
 
-if [[ -z "$MATCHING_SNAPSHOT_JSON" ]]; then
+MATCHING_SNAPSHOT_NAME=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
+    .[] | select(.name | test($TIMESTAMP)) | .name
+' | head -n 1)
+
+# Validate snapshot match
+if [[ -z "$MATCHING_SNAPSHOT_ID" ]] || [[ "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
     echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
     exit 4
-fi
-
-# Extracting the ID and Name from the first matching snapshot found
-MATCHING_SNAPSHOT_ID=$(echo "$MATCHING_SNAPSHOT_JSON" | head -n 1 | jq -r '.snapshotID')
-MATCHING_SNAPSHOT_NAME=$(echo "$MATCHING_SNAPSHOT_JSON" | head -n 1 | jq -r '.name')
-
-if [[ -z "$MATCHING_SNAPSHOT_ID" ]]; then
-    echo "ERROR: Successfully matched a snapshot name, but failed to extract the Snapshot ID. Exiting."
-    exit 5
 fi
 
 # Print correlation results
 echo "--------------------------------------------"
 echo "Snapshot Match Found (Rollback Target)"
-echo "Volume ID:        $BOOT_VOL"
 echo "Snapshot ID:      $MATCHING_SNAPSHOT_ID"
 echo "Snapshot Name:    $MATCHING_SNAPSHOT_NAME"
 echo "Timestamp Match:  $TIMESTAMP"
 echo "--------------------------------------------"
+
 
 echo "--- Part 2 Complete ---"
 echo ""
@@ -192,17 +184,16 @@ wait_for_status() {
 
 # Function to check if volumes are detached
 check_volumes_detached() {
-    # List volumes attached to the LPAR in JSON format. Expects empty array [] if none attached.
-    VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
-    
-    # Check if the array contains any items. jq '.' returns the entire object/array. 
-    # If the array is empty ([]), jq output will be empty.
-    if [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; then
-        return 0 # Success: No volumes attached
+    VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "{}")
+
+    # Check if .volumes array exists and has elements
+    if [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]?')" ]; then
+        return 0  # Success: No volumes attached
     else
-        return 1 # Failure: Volumes are still present
+        return 1  # Failure: Volumes still attached
     fi
 }
+
 
 # Function to check if a specific volume is successfully deleted
 check_volume_deleted() {
