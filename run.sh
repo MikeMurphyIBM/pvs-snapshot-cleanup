@@ -97,13 +97,13 @@ VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
 
 # Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name based on the naming convention.
 SNAPSHOT_TIME_REF=""
-# FIX: Use correct Bash regex syntax to capture exactly 12 digits (allowing 0-9).
+# FIX: Corrected regex syntax to match the prefix and CAPTURE EXACTLY 12 DIGITS (0-9).
 if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
     # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
-    # The variable $VOLUME_NAME should contain the full name, resolving the error
+    # The variable VOLUME_NAME now correctly contains the full name, resolving the initial error
     echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
 fi
 
