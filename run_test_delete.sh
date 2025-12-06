@@ -428,8 +428,6 @@ SNAPSHOT_DELETED=1
 echo "Snapshot to be deleted: $MATCHING_SNAPSHOT_NAME"
 
 # --- 2. Delete the snapshot ---
-echo "Initiating deletion for Snapshot ID: $MATCHING_SNAPSHOT_ID"
-
 # The command to delete a snapshot is part of the deprecated 'ibmcloud pi snapshot' family,
 # replaced by 'ibmcloud pi instance snapshot delete'.
 echo "Initiating deletion for Snapshot ID: $MATCHING_SNAPSHOT_ID"
