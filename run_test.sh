@@ -104,32 +104,33 @@ fi
 
 echo "Extracted timestamp: $TIMESTAMP"
 
-
 echo "Fetching snapshot list across the workspace..."
-# Note: ibmcloud pi instance snapshot ls lists snapshots created within the current workspace context
-ALL_SNAPS_JSON=$(ibmcloud pi instance snapshot ls --json 2>/dev/null || echo "[]")
+ALL_SNAPS_JSON=$(ibmcloud pi instance snapshot ls --json 2>/dev/null || echo "{}")
 
-# If volume data retrieval failed or returned empty results
-if [ "$ALL_SNAPS_JSON" == "[]" ] || [ -z "$(echo "$ALL_SNAPS_JSON" | jq '.[]')" ]; then
-    echo "WARNING: No snapshots found in this workspace. Correlation will fail."
+# Count snapshots
+SNAP_COUNT=$(echo "$ALL_SNAPS_JSON" | jq '.snapshots | length')
+
+if [ "$SNAP_COUNT" -eq 0 ]; then
+    echo "ERROR: No snapshots exist in workspace. Cannot determine rollback target."
+    exit 4
 fi
 
-# Find matching snapshot by identifying the timestamp in the snapshot name
+# Find matching snapshot ID
 MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
-    .[] | select(.name | test($TIMESTAMP)) | .snapshotID
+    .snapshots[] | select(.name | test($TIMESTAMP)) | .snapshotID
 ' | head -n 1)
 
+# Find matching snapshot NAME
 MATCHING_SNAPSHOT_NAME=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
-    .[] | select(.name | test($TIMESTAMP)) | .name
+    .snapshots[] | select(.name | test($TIMESTAMP)) | .name
 ' | head -n 1)
 
-# Validate snapshot match
+# Validate match
 if [[ -z "$MATCHING_SNAPSHOT_ID" ]] || [[ "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
     echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
     exit 4
 fi
 
-# Print correlation results
 echo "--------------------------------------------"
 echo "Snapshot Match Found (Rollback Target)"
 echo "Snapshot ID:      $MATCHING_SNAPSHOT_ID"
