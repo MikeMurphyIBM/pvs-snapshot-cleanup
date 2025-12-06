@@ -47,6 +47,11 @@ echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
 # If the command fails (e.g., LPAR not found), echo an empty JSON array "{}" or "[]" to prevent script crash
 VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
 
+# Debugging step: Check the raw JSON output captured in the variable
+echo "Raw VOLUME_DATA received:"
+echo "$VOLUME_DATA"
+# Expected to fail here if data is bad, allowing inspection of the output above
+
 # If volume data retrieval failed or returned empty results
 if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; then
     echo "Error: Could not retrieve volume data or no volumes found for $LPAR_NAME. Exiting."
@@ -54,7 +59,6 @@ if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; the
 fi
 
 # Extract Boot Volume ID (where "bootVolume" == true)
-# -r ensures raw output (no quotes around the UUID)
 BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootVolume == true) | .volumeID')
 
 # Extract Data Volume IDs (where "bootVolume" == false)
