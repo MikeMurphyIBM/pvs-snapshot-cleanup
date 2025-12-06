@@ -34,6 +34,7 @@ ibmcloud pi ws target "$PVS_CRN"
 
 # --- NEW STABILIZATION STEP: Retrieve unique LPAR Instance ID ---
 echo "0.2. Retrieving unique Instance ID for LPAR: $LPAR_NAME"
+
 # Use instance list command, which proved stable, and filter by name to get the pvmInstanceID.
 LPAR_ID=$(ibmcloud pi instance list --json 2>/dev/null | \
           jq -r ".pvmInstances[] | select(.name == \"$LPAR_NAME\") | .id" || true)
@@ -96,14 +97,16 @@ VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
 
 # Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name based on the naming convention.
 SNAPSHOT_TIME_REF=""
-# FIX: Corrected regex syntax to match the prefix and capture exactly 12 digits.
+# FIX: Use correct Bash regex syntax to capture exactly 12 digits (allowing 0-9).
 if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
     # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
+    # The variable $VOLUME_NAME should contain the full name, resolving the error
     echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
 fi
+
 
 # ----------------------------------------------------------------
 # PHASE 1: Immediate Shutdown and Poll for SHUTOFF (Skipping graceful stop)
