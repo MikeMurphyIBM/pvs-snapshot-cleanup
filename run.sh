@@ -7,6 +7,7 @@ RESOURCE_GROP_NAME="Default"     # Targeted Resource Group
 PVS_CRN="crn:v1:bluemix:public:power-iaas:dal10:a/21d74dd4fe814dfca20570bbb93cdbff:cc84ef2f-babc-439f-8594-571ecfcbe57a::" # Full PowerVS Workspace CRN
 CLOUD_INSTANCE_ID="cc84ef2f-babc-439f-8594-571ecfcbe57a" # PowerVS Workspace ID
 LPAR_NAME="empty-ibmi-lpar"      # Name of the target LPAR
+CLONE_NAME_PREFIX="CLONE-RESTORE-$(date +"%Y%m%d%H%M")"  # Unique prefix for the new cloned volumes, excluding seconds (%S)
 JOB_SUCCESS=0 # Default to failure for safety in case of crash
 
 # --- Dynamic Variables (Populated during Discovery) ---
@@ -16,9 +17,13 @@ ALL_CLONE_IDS=""
 SNAPSHOT_ID=""
 SNAPSHOT_TIME_REF=""
 
-# --- Configuration ---
-POLL_INTERVAL=120 # seconds
-MAX_POLL_ITERATIONS=20 # Max 20 minutes for LPAR shutdown, adjustment applied later for volume detach
+# --- Context Variables (Define these at the start of your script) ---
+# Maximum total time to wait (in seconds)
+MAX_WAIT=600
+# Interval between checks (in seconds)
+POLL_INTERVAL=10
+# Calculate maximum iterations
+MAX_DETACH_ITERATIONS=$((MAX_WAIT / POLL_INTERVAL))
 
 # ================================================================
 echo "--- CRITICAL CLEANUP: PowerVS Resource Rollback Started ---"
@@ -236,6 +241,54 @@ fi
 # PHASE 3: Detach BOOT Volume and Poll
 # ----------------------------------------------------------------
 
+ITERATIONS=0
+ALL_DETACHED=false
+
+while [[ "$ALL_DETACHED" == "false" && "$ITERATIONS" -lt "$MAX_DETACH_ITERATIONS" ]]; do
+
+    # NEW METHOD: Execute IBM Cloud CLI query to find IDs of volumes
+    # currently matching the prefix AND still attached.
+
+    NEW_CLONE_IDS=$(ibmcloud pi volume list --long --json | \
+        jq -r ".volumes[] | 
+               select(.name | contains(\"$CLONE_NAME_PREFIX\")) | 
+               select(.pvmInstanceIDs | length > 0) | 
+               .volumeID")
+
+    # The outer 'select(.pvmInstanceIDs | length > 0)' ensures we only capture IDs that are currently attached to *some* instance.
+
+    # Convert string of attached IDs into an array for checking the count
+    IFS=$'\n' read -r -a ATTACHED_IDS_ARRAY <<< "$NEW_CLONE_IDS"
+    
+    # Filter out empty entries if the list was empty
+    STILL_ATTACHED_LIST=()
+    for ID in "${ATTACHED_IDS_ARRAY[@]}"; do
+        if [[ -n "$ID" ]]; then
+            STILL_ATTACHED_LIST+=("$ID")
+        fi
+    done
+
+    STILL_ATTACHED_COUNT=${#STILL_ATTACHED_LIST[@]}
+    
+    if [[ "$STILL_ATTACHED_COUNT" -eq 0 ]]; then
+        ALL_DETACHED=true
+        echo "SUCCESS: All volumes matching prefix '$CLONE_NAME_PREFIX' successfully detached."
+        break
+    else
+        # Display which specific volumes remain attached
+        echo "Polling detachment status. Still attached ($STILL_ATTACHED_COUNT): ${STILL_ATTACHED_LIST[*]}."
+        echo "Waiting $POLL_INTERVAL seconds..."
+        sleep "$POLL_INTERVAL"
+        ITERATIONS=$((ITERATIONS + 1))
+    fi
+
+done
+
+# --- Exit Logic (After loop) ---
+if [[ "$ALL_DETACHED" == "false" ]]; then
+    echo "FATAL: Timeout reached while waiting for volume detachment." >&2
+    exit 1
+fi
 
 # ----------------------------------------------------------------
 # PHASE 4: Snapshot Discovery and Deletion
