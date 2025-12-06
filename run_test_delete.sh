@@ -10,11 +10,11 @@ CLOUD_INSTANCE_ID="cc84ef2f-babc-439f-8594-571ecfcbe57a"
 LPAR_NAME="empty-ibmi-lpar"
 JOB_SUCCESS=0
 
-#---------------------------------------------------------
-#  Part 1:  Authentication
-#---------------------------------------------------------
+---------------------------------------------------------
+echo "Step 1 of 7:  IBM Cloud Authentication"
+---------------------------------------------------------
 
-echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"
+echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"  
 
 # --- 1. Authenticate and Target Resources ---
 echo "1. Authenticating to IBM Cloud and targeting PowerVS instance..."
@@ -40,12 +40,14 @@ ibmcloud pi workspace target "$PVS_CRN" > /dev/null 2>&1 || {
 
 echo "Authentication and targeting successful."
 
-#---------------------------------------------------------
-#  Part 2:  Volume and Snapshot Identification
-#---------------------------------------------------------
+echo "--- Part 1 of 7 Complete ---"
+echo ""
 
+---------------------------------------------------------
+echo "Step 2 of 7:  Storage Volume Identification (for after detachment)"
+---------------------------------------------------------
 
-echo echo "--- PowerVS Cleanup and Rollback Operation - Volume and Snapshot Identificaton---"
+echo "--- PowerVS Cleanup and Rollback Operation - Storage Volume Identificaton---"
 
 # --- 2. Identify Attached Volumes ---
 echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
@@ -80,8 +82,14 @@ fi
 echo "Boot Volume: $BOOT_VOL"
 echo "Data Volume(s): $DATA_VOLS"
 
-echo "--- Snapshot Identification ---"
+
+echo "--- Part 2 of 7 Complete ---"
 echo ""
+
+
+---------------------------------------------------------
+echo "Part 3 of 7:  Snapshot Identification"
+---------------------------------------------------------
 
 # --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
@@ -139,17 +147,18 @@ echo "Timestamp Match:  $TIMESTAMP"
 echo "--------------------------------------------"
 
 
-echo "--- Part 2 Complete ---"
+echo "--- Part 3 of 7 Complete ---"
 echo ""
 
-#---------------------------------------------------------
-#  Part 3:  Shutdown of LPAR
-#---------------------------------------------------------
+---------------------------------------------------------
+echo "Part 4 of 7:  LPAR Shutdown"
+---------------------------------------------------------
 
 # Exit immediately if a command exits with a non-zero status
 set -e
+set -o pipefail
 
-echo echo "--- PowerVS Cleanup and Rollback Operation - LPAR Shutdown ---"
+echo "--- PowerVS Cleanup and Rollback Operation - LPAR Shutdown ---"
 
 # --- Utility Functions ---
 
@@ -183,6 +192,7 @@ wait_for_status() {
     return 1 # Failure
 }
 
+
 # Function to check if volumes are detached
 check_volumes_detached() {
     VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "{}")
@@ -212,32 +222,45 @@ check_volume_deleted() {
 
 echo "--- Initiating LPAR Shutdown ---"
 
+
 CURRENT_STATUS=$(get_lpar_status)
+echo "Initial LPAR status: $CURRENT_STATUS"
 
-if [ "$CURRENT_STATUS" == "Active" ] || [ "$CURRENT_STATUS" == "Warning" ]; then
-    echo "LPAR is $CURRENT_STATUS. Sending immediate shutdown command..."
-    # Perform immediate shutdown operation
-    ibmcloud pi ins act "$LPAR_NAME" --operation immediate-shutdown || { 
-        echo "Failed to send immediate shutdown command. Attempting graceful shutdown."
-        ibmcloud pi ins act "$LPAR_NAME" --operation stop || { 
-            echo "Failed to send any shutdown command. Exiting."
+if [[ "$CURRENT_STATUS" == "Active" || "$CURRENT_STATUS" == "Warning" ]]; then
+    echo "Shutdown required. Sending immediate shutdown..."
+    
+    if ! ibmcloud pi ins act "$LPAR_NAME" --operation immediate-shutdown; then
+        echo "Immediate shutdown failed. Attempting graceful shutdown..."
+        
+        if ! ibmcloud pi ins act "$LPAR_NAME" --operation stop; then
+            echo "Shutdown commands failed. Exiting."
             exit 1
-        }
+        fi
+    fi
+else
+    echo "Skipping shutdown, LPAR state is already: $CURRENT_STATUS"
+fi
+
+# *** RECHECK STATUS ***
+sleep 10
+UPDATED_STATUS=$(get_lpar_status)
+echo "Status after shutdown command: $UPDATED_STATUS"
+
+if [[ "$UPDATED_STATUS" != "SHUTOFF" ]]; then
+    echo "LPAR still shutting down — Waiting..."
+    
+    wait_for_status 600 "SHUTOFF" || {
+        echo "WARNING: Shutdown not confirmed after timeout."
     }
 fi
 
-if [ "$CURRENT_STATUS" != "SHUTOFF" ]; then
-    # Wait for the shutoff state if it wasn't already reached
-    wait_for_status 180 "SHUTOFF" || {
-        echo "LPAR did not reach SHUTOFF state. Proceeding cautiously."
-    }
-fi
+echo "LPAR verified ready for volume operations."
+echo "Part 4 of 7 Complete"
 
-echo "LPAR ready for volume operations."
 
-#---------------------------------------------------------
-#  Part 4:  Detaching Boot and Storage Volumes
-#---------------------------------------------------------
+---------------------------------------------------------
+echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
+---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
 
@@ -274,11 +297,12 @@ else
     done
 fi
 
-echo "Volume detachment phase complete."
+echo "Volume detachment finalized, ready for deletion."
+echo "Part 5 of 7 complete"
 
-#---------------------------------------------------------
-#  Part 5:  Volume Deletion
-#---------------------------------------------------------
+---------------------------------------------------------
+echo "Part 6 of 7:  Storage Volume Deletion"
+---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
 
@@ -297,7 +321,7 @@ echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
 DELETION_CHECK_MAX_TIME=120
 SLEEP_INTERVAL=30
 
-# --- 5a & 5b. Initiate Concurrent Deletion of All Volumes ---
+# --- Initiate Concurrent Deletion of All Volumes ---
 echo "Initiating deletion for Boot Volume: $BOOT_VOL"
 # Initiate delete request for Boot Volume immediately
 ibmcloud pi vol delete "$BOOT_VOL" || echo "Warning: Command to delete $BOOT_VOL returned a non-zero code."
@@ -318,7 +342,7 @@ else
     echo "No data volumes identified for deletion."
 fi
 
-# --- 5c. Verification: Wait for Boot Volume deletion (Max 120s) ---
+# --- Verification: Wait for Boot Volume deletion (Max 120s) ---
 echo "3. Verifying deletion status for Boot Volume: $BOOT_VOL"
 CURRENT_TIME=0
 BOOT_VOL_DELETED=1
@@ -340,7 +364,7 @@ if [ "$BOOT_VOL_DELETED" -ne 0 ]; then
     exit 6 # Critical failure, stopping script
 fi
 
-# --- 5d. Verification: Wait for Data Volumes deletion (Max 120s) ---
+# --- Verification: Wait for Data Volumes deletion (Max 120s) ---
 if [[ -n "$DATA_VOLS" ]]; then
     echo "4. Verifying deletion status for Data Volume(s)..."
     
@@ -371,12 +395,12 @@ if [[ -n "$DATA_VOLS" ]]; then
 fi
 
 echo "Volume deletion verification phase complete."
-echo "--- Part 5 Complete ---"
+echo "--- Part 5 of 7 Complete ---"
 echo ""
 
-#---------------------------------------------------------
-#  Part 6:  Snapshot Deletion
-#---------------------------------------------------------
+---------------------------------------------------------
+echo "Part 7 of 7:  Snapshot Deletion"
+---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 
@@ -435,15 +459,15 @@ while [ "$CURRENT_TIME" -lt "$SNAPSHOT_CHECK_MAX_TIME" ]; do
     fi
 done
 
-echo "--- Cleanup and Rollback Operation Complete ---"
+echo "--- Cleanup and Rollback Operation Complete.  Partition is ready for next Backup Operation ---"
 echo "Job Success Status: $JOB_SUCCESS"
 
-# Final cleanup scripts should typically include setting JOB_SUCCESS to 1 if all steps completed correctly
-# JOB_SUCCESS=1
+# If execution reached this point, all operations succeeded
+JOB_SUCCESS=1
 
 
 #---------------------------------------------------------
-#  Part 7: LPAR Deletion
+echo "Part 8: (Optional) LPAR Deletion
 #---------------------------------------------------------
 
 echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
@@ -501,7 +525,7 @@ fi
 # Cleanup success — set status variable
 JOB_SUCCESS=1
 echo "LPAR deletion complete — cleanup successful!"
-echo "--- Part 7 Complete ---"
+echo "--- Part 8 Complete ---"
 echo "Final Job Success Status: $JOB_SUCCESS"
 
 
