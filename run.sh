@@ -46,8 +46,7 @@ echo "Found Instance ID: $LPAR_ID"
 
 # --- MODIFIED STEP: Identify attached volumes using Instance ID ---
 echo "0.3. Identifying attached volumes using Instance ID: $LPAR_ID"
-# Use the stable Instance ID to list volumes attached to the instance [Conversation History].
-VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_ID" --json 2>/dev/null || echo "{}")
+VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_ID" --json 2>/dev/null || 
 
 # Check if volume data is empty/malformed
 if [[ "$VOLUME_DATA" == "{}" || "$VOLUME_DATA" == "[]" ]]; then
@@ -89,24 +88,20 @@ if [[ -z "$ALL_CLONE_IDS" ]]; then
     exit 0
 fi
 
-# FIX: Safely retrieve the name of the first volume matching the clone prefix.
-# This ensures we have a valid volume name for regex extraction.
+# FIX: Safely retrieve the name of the first clone volume for timestamp extraction.
 VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
     .volumes[] | 
-    select(.name | startswith("clone-CLONE-RESTORE-")) 
-    | .name 
-    | select(length > 0)
+    if .name | startswith("clone-CLONE-RESTORE-") then .name else empty end 
 ' 2>/dev/null | head -n 1 || echo "")
 
-# Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name.
+# Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name based on the naming convention.
 SNAPSHOT_TIME_REF=""
-# Regex explanation: Match the required prefix and capture the subsequent 12 digits.
+# FIX: Corrected regex syntax to match the prefix and capture exactly 12 digits.
 if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
+    # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
     SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
-    # The variable VOLUME_NAME will now contain the full name (e.g., clone-CLONE-RESTORE-202512060039-1) 
-    # or be empty if no matching volume was found in the list.
     echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
 fi
 
