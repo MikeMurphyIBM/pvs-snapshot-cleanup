@@ -10,9 +10,9 @@ CLOUD_INSTANCE_ID="cc84ef2f-babc-439f-8594-571ecfcbe57a"
 LPAR_NAME="empty-ibmi-lpar"
 JOB_SUCCESS=0
 
-echo---------------------------------------------------------
+echo "---------------------------------------------------------"
 echo "Step 1 of 7:  IBM Cloud Authentication"
-echo---------------------------------------------------------
+echo "-----------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"  
 
@@ -43,9 +43,9 @@ echo "Authentication and targeting successful."
 echo "--- Part 1 of 7 Complete ---"
 echo ""
 
-echo"---------------------------------------------------------"
+echo "---------------------------------------------------------"
 echo "Step 2 of 7:  Storage Volume Identification (for after detachment)"
-echo"---------------------------------------------------------"
+echo "---------------------------------------------------------"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Storage Volume Identificaton---"
 
@@ -87,9 +87,9 @@ echo "--- Part 2 of 7 Complete ---"
 echo ""
 
 
-echo"---------------------------------------------------------"
+echo "---------------------------------------------------------"
 echo "Part 3 of 7:  Snapshot Identification"
-echo"---------------------------------------------------------"
+echo "---------------------------------------------------------"
 
 # --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
