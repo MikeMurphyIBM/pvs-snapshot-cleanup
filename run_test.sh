@@ -104,7 +104,7 @@ fi
 
 echo "Extracted timestamp: $TIMESTAMP"
 
-if [[ -z "$TS" ]] || [[ "$TS" == "null" ]]; then
+if [[ -z "$TIMESTAMP" ]] || [[ "$TIMESTAMP" == "null" ]]; then
     echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
     exit 3
 fi
@@ -119,12 +119,12 @@ if [ "$ALL_SNAPS_JSON" == "[]" ] || [ -z "$(echo "$ALL_SNAPS_JSON" | jq '.[]')" 
 fi
 
 # Find matching snapshot by identifying the timestamp in the snapshot name
-MATCHING_SNAPSHOT_JSON=$(echo "$ALL_SNAPS_JSON" | jq -r --arg ts "$TS" '
+MATCHING_SNAPSHOT_JSON=$(echo "$ALL_SNAPS_JSON" | jq -r --arg ts "$TIMESTAMP" '
     .[] | select(.name | test($ts))
 ')
 
 if [[ -z "$MATCHING_SNAPSHOT_JSON" ]]; then
-    echo "ERROR: No snapshot found matching timestamp $TS in the workspace. Cannot determine rollback target."
+    echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
     exit 4
 fi
 
@@ -143,7 +143,7 @@ echo "Snapshot Match Found (Rollback Target)"
 echo "Volume ID:        $BOOT_VOL"
 echo "Snapshot ID:      $MATCHING_SNAPSHOT_ID"
 echo "Snapshot Name:    $MATCHING_SNAPSHOT_NAME"
-echo "Timestamp Match:  $TS"
+echo "Timestamp Match:  $TIMESTAMP"
 echo "--------------------------------------------"
 
 echo "--- Part 2 Complete ---"
