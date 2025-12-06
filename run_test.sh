@@ -81,7 +81,7 @@ echo ""
 
 # --- Assuming BOOT_VOL variable is defined from Part 1 ---
 
-echo "--- PowerVS Cleanup and Rollback Operation - Part 2 ---"
+echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
 
 # Check if BOOT_VOL variable is available (safety check)
 if [[ -z "$BOOT_VOL" ]]; then
@@ -152,7 +152,307 @@ echo "--- Part 2 Complete ---"
 echo ""
 
 #---------------------------------------------------------
-#  Part 2:  Snapshot Identification
+#  Part 3:  Shutdown of LPAR
 #---------------------------------------------------------
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+echo echo "--- PowerVS Cleanup and Rollback Operation - LPAR Shutdown ---"
+
+# --- Utility Functions ---
+
+# Function to check LPAR status (Shutoff/Active)
+get_lpar_status() {
+    ibmcloud pi ins get "$LPAR_NAME" --json 2>/dev/null | jq -r '.status'
+}
+
+# Function to wait for an expected status
+wait_for_status() {
+    local max_time=$1
+    local target_state=$2
+    local current_time=0
+
+    echo "Waiting up to ${max_time} seconds for LPAR to reach state: ${target_state}"
+
+    while [ "$current_time" -lt "$max_time" ]; do
+        STATUS=$(get_lpar_status)
+        echo "Current LPAR status: $STATUS (Time elapsed: ${current_time}s)"
+
+        if [ "$STATUS" == "$target_state" ]; then
+            echo "LPAR reached ${target_state} state."
+            return 0 # Success
+        fi
+
+        sleep 20
+        current_time=$((current_time + 20))
+    done
+
+    echo "Error: LPAR failed to reach $target_state within ${max_time} seconds."
+    return 1 # Failure
+}
+
+# Function to check if volumes are detached
+check_volumes_detached() {
+    # List volumes attached to the LPAR in JSON format. Expects empty array [] if none attached.
+    VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
+    
+    # Check if the array contains any items. jq '.' returns the entire object/array. 
+    # If the array is empty ([]), jq output will be empty.
+    if [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; then
+        return 0 # Success: No volumes attached
+    else
+        return 1 # Failure: Volumes are still present
+    fi
+}
+
+# Function to check if a specific volume is successfully deleted
+check_volume_deleted() {
+    local volume_id=$1
+    
+    # Attempt to get volume details. Expect this command to fail (return non-zero status) if the volume is gone.
+    # We suppress standard output and only rely on stderr/exit code.
+    if ibmcloud pi vol get "$volume_id" > /dev/null 2>&1; then
+        return 1 # Failure: Volume still exists (command succeeded)
+    else
+        # Command failed (expected behavior for a deleted resource)
+        return 0 # Success: Volume appears deleted
+    fi
+}
+
+echo "--- Initiating LPAR Shutdown ---"
+
+CURRENT_STATUS=$(get_lpar_status)
+
+if [ "$CURRENT_STATUS" == "Active" ] || [ "$CURRENT_STATUS" == "Warning" ]; then
+    echo "LPAR is $CURRENT_STATUS. Sending immediate shutdown command..."
+    # Perform immediate shutdown operation
+    ibmcloud pi ins act "$LPAR_NAME" --operation immediate-shutdown || { 
+        echo "Failed to send immediate shutdown command. Attempting graceful shutdown."
+        ibmcloud pi ins act "$LPAR_NAME" --operation stop || { 
+            echo "Failed to send any shutdown command. Exiting."
+            exit 1
+        }
+    }
+fi
+
+if [ "$CURRENT_STATUS" != "SHUTOFF" ]; then
+    # Wait for the shutoff state if it wasn't already reached
+    wait_for_status 180 "SHUTOFF" || {
+        echo "LPAR did not reach SHUTOFF state. Proceeding cautiously."
+    }
+fi
+
+echo "LPAR ready for volume operations."
+
+#---------------------------------------------------------
+#  Part 4:  Detaching Boot and Storage Volumes
+#---------------------------------------------------------
+
+echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
+
+if check_volumes_detached; then
+    echo "Volume check complete: No volumes currently attached to $LPAR_NAME."
+else
+    echo "Executing bulk detach operation for all volumes on $LPAR_NAME..."
+    
+    # Detach all volumes including the primary/boot volume
+    ibmcloud pi ins vol bulk-detach "$LPAR_NAME" --detach-all --detach-primary || {
+        echo "Warning: Bulk detach command failed to initiate. Check manually."
+        # Attempt to proceed regardless of failure to initiate bulk detach
+    }
+    
+    DETACH_TIMEOUT_SECONDS=180
+    CURRENT_TIME=0
+    
+    echo "Waiting up to ${DETACH_TIMEOUT_SECONDS} seconds for all volumes to detach..."
+
+    while [ "$CURRENT_TIME" -lt "$DETACH_TIMEOUT_SECONDS" ]; do
+        if check_volumes_detached; then
+            echo "All volumes successfully detached."
+            break
+        fi
+
+        sleep 20
+        CURRENT_TIME=$((CURRENT_TIME + 20))
+
+        if [ "$CURRENT_TIME" -ge "$DETACH_TIMEOUT_SECONDS" ]; then
+            echo "Error: Volumes failed to detach within ${DETACH_TIMEOUT_SECONDS} seconds. Exiting."
+            exit 1
+        fi
+        echo "Waiting for volumes to detach (Time elapsed: ${CURRENT_TIME}s)"
+    done
+fi
+
+echo "Volume detachment phase complete."
+
+#---------------------------------------------------------
+#  Part 5:  Volume Deletion
+#---------------------------------------------------------
+
+echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
+
+# --- Utility Function assumed from prior parts ---
+# Function to check if a specific volume is successfully deleted
+# check_volume_deleted() {
+#     local volume_id=$1
+#     # Attempt to get volume details. Expect this command to fail (return non-zero status) if the volume is gone.
+#     if ibmcloud pi vol get "$volume_id" > /dev/null 2>&1; then
+#         return 1 # Failure: Volume still exists (command succeeded)
+#     else
+#         return 0 # Success: Volume appears deleted (command failed)
+#     fi
+# }
+
+DELETION_CHECK_MAX_TIME=120
+SLEEP_INTERVAL=30
+
+# --- 5a & 5b. Initiate Concurrent Deletion of All Volumes ---
+echo "Initiating deletion for Boot Volume: $BOOT_VOL"
+# Initiate delete request for Boot Volume immediately
+ibmcloud pi vol delete "$BOOT_VOL" || echo "Warning: Command to delete $BOOT_VOL returned a non-zero code."
+
+# Check if DATA_VOLS are present and initiate deletion for each
+if [[ -n "$DATA_VOLS" ]]; then
+    echo "Initiating concurrent deletion for Data Volume(s)..."
+    # Split the comma-separated string into an array of IDs
+    IFS=',' read -r -a DATA_VOL_ARRAY <<< "$DATA_VOLS"
+
+    for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
+        if [[ -z "$DATA_VOL_ID" ]]; then continue; fi # Skip if empty
+        echo " -- Initiating delete for Data Volume: $DATA_VOL_ID"
+        # Execute deletion request without waiting
+        ibmcloud pi vol delete "$DATA_VOL_ID" || echo "Warning: Command to delete $DATA_VOL_ID returned a non-zero code."
+    done
+else
+    echo "No data volumes identified for deletion."
+fi
+
+# --- 5c. Verification: Wait for Boot Volume deletion (Max 120s) ---
+echo "3. Verifying deletion status for Boot Volume: $BOOT_VOL"
+CURRENT_TIME=0
+BOOT_VOL_DELETED=1
+
+while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]; do
+    if check_volume_deleted "$BOOT_VOL"; then
+        echo "Boot Volume $BOOT_VOL successfully deleted."
+        BOOT_VOL_DELETED=0
+        break
+    fi
+
+    sleep "$SLEEP_INTERVAL"
+    CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
+    echo "Waiting for $BOOT_VOL deletion (Time elapsed: ${CURRENT_TIME}s)"
+done
+
+if [ "$BOOT_VOL_DELETED" -ne 0 ]; then
+    echo "ERROR: Boot Volume $BOOT_VOL could not be confirmed deleted within ${DELETION_CHECK_MAX_TIME} seconds. Exiting cleanup."
+    exit 6 # Critical failure, stopping script
+fi
+
+# --- 5d. Verification: Wait for Data Volumes deletion (Max 120s) ---
+if [[ -n "$DATA_VOLS" ]]; then
+    echo "4. Verifying deletion status for Data Volume(s)..."
+    
+    for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
+        if [[ -z "$DATA_VOL_ID" ]]; then continue; fi
+        
+        CURRENT_TIME=0
+        DATA_VOL_DELETED=1
+
+        while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]; do
+            if check_volume_deleted "$DATA_VOL_ID"; then
+                echo "Data Volume $DATA_VOL_ID successfully deleted."
+                DATA_VOL_DELETED=0
+                break
+            fi
+            
+            sleep "$SLEEP_INTERVAL"
+            CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
+            echo "Waiting for $DATA_VOL_ID deletion (Time elapsed: ${CURRENT_TIME}s)"
+
+            if [ "$CURRENT_TIME" -ge "$DELETION_CHECK_MAX_TIME" ] && [ "$DATA_VOL_DELETED" -ne 0 ]; then
+                echo "Warning: Data Volume $DATA_VOL_ID could not be confirmed deleted within ${DELETION_CHECK_MAX_TIME} seconds."
+                # Allow continuing to check other data volumes even if one fails verification
+                break 
+            fi
+        done
+    done
+fi
+
+echo "Volume deletion verification phase complete."
+echo "--- Part 5 Complete ---"
+echo ""
+
+#---------------------------------------------------------
+#  Part 6:  Snapshot Deletion
+#---------------------------------------------------------
+
+echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+# --- Utility Function to check snapshot deletion status ---
+# This function relies on 'ibmcloud pi instance snapshot get' failing (non-zero exit code)
+# when the resource (snapshot) is successfully deleted (404 Not Found).
+check_snapshot_deleted() {
+    local snapshot_id=$1
+    # Attempt to retrieve snapshot details. Suppress output.
+    if ibmcloud pi instance snapshot get "$snapshot_id" > /dev/null 2>&1; then
+        return 1 # Failure (Snapshot still exists, command succeeded)
+    else
+        return 0 # Success (Snapshot appears deleted, command failed - indicating 404/Not Found)
+    fi
+}
+
+# --- Define constants for check loop ---
+SNAPSHOT_CHECK_MAX_TIME=120
+SLEEP_INTERVAL=30
+SNAPSHOT_DELETED=1
+
+# --- 1. Print the Snapshot Name ---
+echo "Snapshot to be deleted: $MATCHING_SNAPSHOT_NAME"
+
+# --- 2. Delete the snapshot ---
+echo "Initiating deletion for Snapshot ID: $MATCHING_SNAPSHOT_ID"
+
+# The command to delete a snapshot is part of the deprecated 'ibmcloud pi snapshot' family,
+# replaced by 'ibmcloud pi instance snapshot delete'.
+ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID" || {
+    echo "Warning: Command to initiate deletion of $MATCHING_SNAPSHOT_ID returned a non-zero code."
+}
+
+# --- 3. Verification Loop ---
+CURRENT_TIME=0
+echo "Waiting up to ${SNAPSHOT_CHECK_MAX_TIME} seconds for snapshot deletion confirmation..."
+
+while [ "$CURRENT_TIME" -lt "$SNAPSHOT_CHECK_MAX_TIME" ]; do
+    if check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
+        echo "Snapshot $MATCHING_SNAPSHOT_ID successfully deleted (Resource not found)."
+        SNAPSHOT_DELETED=0
+        break
+    fi
+
+    # Pause execution before checking again
+    sleep "$SLEEP_INTERVAL"
+    CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
+    echo "Checking status of $MATCHING_SNAPSHOT_ID (Time elapsed: ${CURRENT_TIME}s)"
+
+    if [ "$CURRENT_TIME" -ge "$SNAPSHOT_CHECK_MAX_TIME" ] && [ "$SNAPSHOT_DELETED" -ne 0 ]; then
+        echo "Error: Snapshot $MATCHING_SNAPSHOT_ID could not be confirmed deleted within ${SNAPSHOT_CHECK_MAX_TIME} seconds."
+        exit 7 # Failure to confirm final cleanup step
+    fi
+done
+
+echo "--- Cleanup and Rollback Operation Complete ---"
+echo "Job Success Status: $JOB_SUCCESS"
+
+# Final cleanup scripts should typically include setting JOB_SUCCESS to 1 if all steps completed correctly
+# JOB_SUCCESS=1
+
+
+
+
 
 
