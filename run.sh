@@ -97,10 +97,10 @@ VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '
 
 # Extract the 12-digit timestamp (YYYYMMDDHHMM) from the volume name.
 SNAPSHOT_TIME_REF=""
-# FIX: Corrected regex syntax to match the prefix and CAPTURE EXACTLY 12 DIGITS (0-9).
-if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-({12}) ]]; then
-    # BASH_REMATCH holds the content of the first capture group (the 12 digits).
-    SNAPSHOT_TIME_REF="${BASH_REMATCH}"
+# FIX: Use regex to match CLONE-RESTORE- prefix and capture exactly 12 digits (0-9).
+if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
+    # BASH_REMATCH[1] holds the content of the first capture group (the 12 digits).
+    SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
     echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
@@ -213,19 +213,20 @@ fi
 # ----------------------------------------------------------------
 # PHASE 4: Snapshot Discovery and Deletion
 # ----------------------------------------------------------------
+
 if [[ -n "$SNAPSHOT_TIME_REF" ]]; then
-    # Construct the expected snapshot name using the extracted timestamp
+    # Construct the expected snapshot name (e.g., TMP_SNAP_202512060039)
     TARGET_SNAPSHOT_NAME="TMP_SNAP_$SNAPSHOT_TIME_REF"
     echo "4. Attempting to locate and delete snapshot: $TARGET_SNAPSHOT_NAME"
 
-    # Use 'ibmcloud pi volume snapshot list' [13, 14] and jq to find snapshot ID by exact name
-    SNAPSHOT_ID_TO_DELETE=$(ibmcloud pi volume snapshot list --json | \
+    # Query all snapshots and use jq to find the exact ID matching the unique name
+    SNAPSHOT_ID_TO_DELETE=$(ibmcloud pi instance snapshot list --json | \
         jq -r ".snapshots[] | select(.name == \"$TARGET_SNAPSHOT_NAME\") | .snapshotID")
 
     if [[ -n "$SNAPSHOT_ID_TO_DELETE" ]]; then
         echo "Found target Snapshot ID: $SNAPSHOT_ID_TO_DELETE. Deleting..."
         
-        # Use 'ibmcloud pi instance snapshot delete' [15, 16]
+        # Snapshot deletion command (deletion of the associated snapshot is standard for cleanup) [10]
         ibmcloud pi instance snapshot delete "$CLONE_BOOT_ID" --snapshot "$SNAPSHOT_ID_TO_DELETE" || {
             echo "ERROR: Failed to delete snapshot $TARGET_SNAPSHOT_NAME. Manual cleanup required."
             exit 1
