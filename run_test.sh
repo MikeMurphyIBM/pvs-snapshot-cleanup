@@ -94,7 +94,7 @@ echo "Extracted volume name: $BOOT_VOL_NAME"
 
 # 2. Extract the 12-digit timestamp (YYYYMMDDhhmm) using grep for robust pattern matching
 # The volume name structure ("clone-CLONE-RESTORE-202512051232-2") contains the critical timestamp
-TIMESTAMP=$(echo "$BOOT_VOL_NAME" | grep -oE '\d{12}')
+TIMESTAMP=$(echo "$BOOT_VOL_NAME" | grep -oE '\d{14}')
 
 # If extraction failed, exit with the correlation error
 if [ -z "$TIMESTAMP" ]; then
