@@ -11,35 +11,41 @@ LPAR_NAME="empty-ibmi-lpar"
 JOB_SUCCESS=0
 
 #---------------------------------------------------------
-#  Part 1:  Authentication and Volume Identification
+#  Part 1:  Authentication
 #---------------------------------------------------------
 
-echo "--- PowerVS Cleanup and Rollback Operation - Part 1 ---"
+echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"
 
 # --- 1. Authenticate and Target Resources ---
 echo "1. Authenticating to IBM Cloud and targeting PowerVS instance..."
 
 # Login using API Key and set region
-# We use --no-wait where possible to speed up execution
-ibmcloud login --apikey "$API_KEY" -r "$REGION" --no-wait > /dev/null 2>&1 || {
+ibmcloud login --apikey "$API_KEY" -r "$REGION" > /dev/null 2>&1 || {
     echo "Authentication failed. Exiting."
     exit 1
 }
 
 # Target Resource Group
-ibmcloud target -g "$RESOURCE_GROUP_NAME" --no-wait > /dev/null 2>&1 || {
+ibmcloud target -g "$RESOURCE_GROUP_NAME" > /dev/null 2>&1 || {
     echo "Failed to target resource group $RESOURCE_GROUP_NAME. Exiting."
     exit 1
 }
 
 # Target PowerVS Workspace using CRN
-# Note: ibmcloud pi ws tg sets the context for all subsequent 'ibmcloud pi' commands
-ibmcloud pi ws tg "$PVS_CRN" --no-wait > /dev/null 2>&1 || {
+# Note: ibmcloud pi workspace target sets the context for all subsequent 'ibmcloud pi' commands
+ibmcloud pi workspace target "$PVS_CRN" > /dev/null 2>&1 || {
     echo "Failed to target PowerVS workspace $PVS_CRN. Exiting."
     exit 1
 }
 
 echo "Authentication and targeting successful."
+
+#---------------------------------------------------------
+#  Part 2:  Volume and Snapshot Identification
+#---------------------------------------------------------
+
+
+echo echo "--- PowerVS Cleanup and Rollback Operation - Volume and Snapshot Identificaton---"
 
 # --- 2. Identify Attached Volumes ---
 echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
@@ -48,19 +54,21 @@ echo "2. Identifying attached volumes for LPAR: $LPAR_NAME"
 # If the command fails (e.g., LPAR not found), echo an empty JSON array "{}" or "[]" to prevent script crash
 VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
 
+# Debugging step: Check the raw JSON output captured in the variable
+#echo "Raw VOLUME_DATA received:"
+#echo "$VOLUME_DATA"
+
 # If volume data retrieval failed or returned empty results
-if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; then
+if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]')" ]; then
     echo "Error: Could not retrieve volume data or no volumes found for $LPAR_NAME. Exiting."
     exit 1
 fi
 
-# Extract Boot Volume ID (where "bootable" == true)
-# -r ensures raw output (no quotes around the UUID)
-BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootable == true) | .volumeID')
+# Extract Boot Volume ID (where "bootVolume" == true)
+BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == true) | .volumeID')
 
-# Extract Data Volume IDs (where "bootable" == false)
-# jq extracts IDs, paste joins them with commas for cleaner output
-DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootable == false) | .volumeID' | paste -sd "," -)
+# Extract Data Volume IDs (where "bootVolume" == false)
+DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
 
 # Check if BOOT_VOL was found (critical for rollback operation)
 if [ -z "$BOOT_VOL" ]; then
@@ -72,81 +80,64 @@ fi
 echo "Boot Volume: $BOOT_VOL"
 echo "Data Volume(s): $DATA_VOLS"
 
-echo "--- Part 1 Complete ---"
+echo "--- Snapshot Identification ---"
 echo ""
 
-#---------------------------------------------------------
-#  Part 2:  Snapshot Identification
-#---------------------------------------------------------
-
-# --- Assuming BOOT_VOL variable is defined from Part 1 ---
-
+# --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
 
-# Check if BOOT_VOL variable is available (safety check)
-if [[ -z "$BOOT_VOL" ]]; then
-    echo "ERROR: BOOT_VOL variable is missing from Part 1 context. Cannot proceed."
+# 1. Extract the full volume name string based on the known Boot Volume ID
+BOOT_VOL_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.volumeID == "'"$BOOT_VOL"'") | .name')
+
+echo "Fetching metadata for Volume ID: $BOOT_VOL..."
+echo "Extracted volume name: $BOOT_VOL_NAME"
+
+# 2. Extract the 12-digit timestamp (YYYYMMDDhhmm) using grep for robust pattern matching
+# The volume name structure ("clone-CLONE-RESTORE-202512051232-2") contains the critical timestamp
+TIMESTAMP=$(echo "$BOOT_VOL_NAME" | grep -oE '[0-9]{12}')
+
+# If extraction failed, exit with the correlation error
+if [ -z "$TIMESTAMP" ]; then
+    echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
     exit 1
 fi
 
-echo "Fetching metadata for Volume ID: $BOOT_VOL..."
-# Retrieve volume details in JSON format. Suppress errors but exit on critical failure.
-BOOT_VOL_JSON=$(ibmcloud pi vol get "$BOOT_VOL" --json 2>/dev/null)
-
-# Check if volume data retrieval was successful (checking for null or empty content)
-if [ -z "$BOOT_VOL_JSON" ] || [ "$(echo "$BOOT_VOL_JSON" | jq -r '.volumeID')" == "null" ]; then
-    echo "ERROR: Could not retrieve valid metadata for volume $BOOT_VOL. Exiting."
-    exit 2
-fi
-
-# Extract timestamp from volume name
-TS=$(echo "$BOOT_VOL_JSON" | jq -r '
-    .name | capture("(?<ts>[1-9]{12})").ts
-')
-
-echo "Extracted timestamp: $TS"
-
-if [[ -z "$TS" ]] || [[ "$TS" == "null" ]]; then
-    echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
-    exit 3
-fi
+echo "Extracted timestamp: $TIMESTAMP"
 
 echo "Fetching snapshot list across the workspace..."
-# Note: ibmcloud pi instance snapshot ls lists snapshots created within the current workspace context
-ALL_SNAPS_JSON=$(ibmcloud pi instance snapshot ls --json 2>/dev/null || echo "[]")
+ALL_SNAPS_JSON=$(ibmcloud pi instance snapshot ls --json 2>/dev/null || echo "{}")
 
-# If volume data retrieval failed or returned empty results
-if [ "$ALL_SNAPS_JSON" == "[]" ] || [ -z "$(echo "$ALL_SNAPS_JSON" | jq '.[]')" ]; then
-    echo "WARNING: No snapshots found in this workspace. Correlation will fail."
-fi
+# Count snapshots
+SNAP_COUNT=$(echo "$ALL_SNAPS_JSON" | jq '.snapshots | length')
 
-# Find matching snapshot by identifying the timestamp in the snapshot name
-MATCHING_SNAPSHOT_JSON=$(echo "$ALL_SNAPS_JSON" | jq -r --arg ts "$TS" '
-    .[] | select(.name | test($ts))
-')
-
-if [[ -z "$MATCHING_SNAPSHOT_JSON" ]]; then
-    echo "ERROR: No snapshot found matching timestamp $TS in the workspace. Cannot determine rollback target."
+if [ "$SNAP_COUNT" -eq 0 ]; then
+    echo "ERROR: No snapshots exist in workspace. Cannot determine rollback target."
     exit 4
 fi
 
-# Extracting the ID and Name from the first matching snapshot found
-MATCHING_SNAPSHOT_ID=$(echo "$MATCHING_SNAPSHOT_JSON" | head -n 1 | jq -r '.snapshotID')
-MATCHING_SNAPSHOT_NAME=$(echo "$MATCHING_SNAPSHOT_JSON" | head -n 1 | jq -r '.name')
+# Find matching snapshot ID
+MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
+    .snapshots[] | select(.name | test($TIMESTAMP)) | .snapshotID
+' | head -n 1)
 
-if [[ -z "$MATCHING_SNAPSHOT_ID" ]]; then
-    echo "ERROR: Successfully matched a snapshot name, but failed to extract the Snapshot ID. Exiting."
-    exit 5
+# Find matching snapshot NAME
+MATCHING_SNAPSHOT_NAME=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
+    .snapshots[] | select(.name | test($TIMESTAMP)) | .name
+' | head -n 1)
+
+# Validate match
+if [[ -z "$MATCHING_SNAPSHOT_ID" ]] || [[ "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
+    echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
+    exit 4
 fi
 
-# Print correlation results
 echo "--------------------------------------------"
 echo "Snapshot Match Found (Rollback Target)"
-echo "Volume ID:        $BOOT_VOL"
 echo "Snapshot ID:      $MATCHING_SNAPSHOT_ID"
 echo "Snapshot Name:    $MATCHING_SNAPSHOT_NAME"
-echo "Timestamp Match:  $TS"
+echo "Timestamp Match:  $TIMESTAMP"
 echo "--------------------------------------------"
+
 
 echo "--- Part 2 Complete ---"
 echo ""
@@ -194,17 +185,16 @@ wait_for_status() {
 
 # Function to check if volumes are detached
 check_volumes_detached() {
-    # List volumes attached to the LPAR in JSON format. Expects empty array [] if none attached.
-    VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
-    
-    # Check if the array contains any items. jq '.' returns the entire object/array. 
-    # If the array is empty ([]), jq output will be empty.
-    if [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; then
-        return 0 # Success: No volumes attached
+    VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "{}")
+
+    # Check if .volumes array exists and has elements
+    if [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]?')" ]; then
+        return 0  # Success: No volumes attached
     else
-        return 1 # Failure: Volumes are still present
+        return 1  # Failure: Volumes still attached
     fi
 }
+
 
 # Function to check if a specific volume is successfully deleted
 check_volume_deleted() {
@@ -445,73 +435,72 @@ while [ "$CURRENT_TIME" -lt "$SNAPSHOT_CHECK_MAX_TIME" ]; do
     fi
 done
 
+echo "--- Cleanup and Rollback Operation Complete ---"
+echo "Job Success Status: $JOB_SUCCESS"
+
+# Final cleanup scripts should typically include setting JOB_SUCCESS to 1 if all steps completed correctly
+# JOB_SUCCESS=1
+
+
 #---------------------------------------------------------
 #  Part 7: LPAR Deletion
 #---------------------------------------------------------
 
-# --- Utility Function: Check if the LPAR instance exists ---
-# Assumes previous commands have correctly authenticated and set the context.
-# We rely on 'ibmcloud pi ins get' returning a non-zero exit code if the resource is deleted.
+echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
+
+# Function: return 0 if instance exists, 1 if gone
 check_instance_exists() {
-    # If the instance is retrieved successfully, it exists (returns 0).
-    # Redirect output to /dev/null to keep the console clean.
     ibmcloud pi ins get "$LPAR_NAME" > /dev/null 2>&1
 }
 
-# --- Define constants for deletion check ---
-# Maximum time (seconds) to wait for the LPAR to be confirmed deleted.
-DELETE_CHECK_MAX_TIME=300
-# Interval (seconds) between checks, as requested.
-CHECK_INTERVAL=60
+# Maximum time (seconds) to wait for confirmed deletion
+DELETE_CHECK_MAX_TIME=300   # 5 minutes
+CHECK_INTERVAL=60           # Poll every 60 seconds
 
-# --- 1. Initiate LPAR Deletion ---
+# First, check whether instance is already gone (just in case)
+if ! check_instance_exists; then
+    echo "LPAR $LPAR_NAME is already deleted — skipping deletion."
+    JOB_SUCCESS=1
+    echo "--- Part 7 Complete ---"
+    echo "Final Job Success Status: $JOB_SUCCESS"
+    exit 0
+fi
+
 echo "Initiating permanent deletion for LPAR: $LPAR_NAME"
 
-# Perform deletion. We use -f (force) to bypass interactive confirmation, which is necessary in automation.
-# Since volumes were already deleted in Part 5, we don't need the --delete-data-volumes flag.
+# Force-delete the instance (no prompt)
 ibmcloud pi ins delete "$LPAR_NAME" -f || {
-    echo "Warning: Command to delete LPAR $LPAR_NAME failed to initiate. Proceeding to verification."
+    echo "Warning: Delete command returned non-zero exit code."
+    echo "Proceeding with verification — deletion may still be in progress."
 }
 
-# --- 2. Verification Loop: Wait for LPAR deletion ---
 CURRENT_TIME=0
 LPAR_DELETED=1
 
-echo "Waiting up to ${DELETE_CHECK_MAX_TIME} seconds, checking every ${CHECK_INTERVAL} seconds, for LPAR deletion..."
+echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion..."
+echo "Checking every ${CHECK_INTERVAL}s..."
 
 while [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; do
-    # Check if the instance still exists
+    
     if ! check_instance_exists; then
         echo "LPAR $LPAR_NAME confirmed deleted."
         LPAR_DELETED=0
         break
     fi
 
-    # Wait for the next interval, unless we are on the last iteration
-    if [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; then
-        sleep "$CHECK_INTERVAL"
-        CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
-    fi
-    
-    echo "Checking status of $LPAR_NAME (Time elapsed: ${CURRENT_TIME}s)"
-    
-    # Check for timeout if we reached the maximum time without deletion confirmation
-    if [ "$CURRENT_TIME" -ge "$DELETE_CHECK_MAX_TIME" ] && [ "$LPAR_DELETED" -ne 0 ]; then
-        echo "Error: LPAR $LPAR_NAME failed to be confirmed deleted within ${DELETE_CHECK_MAX_TIME} seconds."
-        exit 8 # Exit script with failure status
-    fi
+    echo "LPAR still exists. Time elapsed: ${CURRENT_TIME}s — retrying in ${CHECK_INTERVAL}s..."
+    sleep "$CHECK_INTERVAL"
+    CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
 done
 
-# --- 3. Final Status Update ---
-if [ "$LPAR_DELETED" -eq 0 ]; then
-    # Set the job status variable to success (1)
-    JOB_SUCCESS=1
-    echo "LPAR Deletion Successful. Final Cleanup Complete."
-else
-    # Should not be reached if the timeout logic above functions correctly, but kept for safety.
-    echo "Final Cleanup Incomplete. JOB_SUCCESS remains 0."
+if [ "$LPAR_DELETED" -ne 0 ]; then
+    echo "ERROR: LPAR $LPAR_NAME was not fully deleted within ${DELETE_CHECK_MAX_TIME}s."
+    exit 8
 fi
 
+# Cleanup success — set status variable
+JOB_SUCCESS=1
+echo "LPAR deletion complete — cleanup successful!"
 echo "--- Part 7 Complete ---"
 echo "Final Job Success Status: $JOB_SUCCESS"
 
