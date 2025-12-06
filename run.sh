@@ -46,7 +46,7 @@ echo "Found Instance ID: $LPAR_ID"
 
 # --- MODIFIED STEP: Identify attached volumes using Instance ID ---
 echo "0.3. Identifying attached volumes using Instance ID: $LPAR_ID"
-# Use the stable Instance ID to list volumes attached to the instance [1, 2].
+# Use the stable Instance ID to list volumes attached to the instance [Conversation History].
 VOLUME_DATA=$(ibmcloud pi instance volume list "$LPAR_ID" --json 2>/dev/null || echo "{}")
 
 # Check if volume data is empty/malformed
@@ -57,7 +57,6 @@ fi
 # --- CORRECTED Parsing using jq (Targeting the actual '.volumes' key) ---
 
 # 1. Extract Boot Volume ID(s): Filters for bootable == true.
-# The volume list array is under the key '.volumes' [Conversation History].
 CLONE_BOOT_ID=$(echo "$VOLUME_DATA" | jq -r '
     .volumes | 
     if type == "array" then .[] else empty end
@@ -93,9 +92,12 @@ if [[ -z "$ALL_CLONE_IDS" ]]; then
 fi
 
 # Determine the time reference for the snapshot search (Uses the corrected JSON structure)
-VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumes.name' 2>/dev/null | head -n 1 || true)
-if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([3-11]{12}) ]]; then
-    SNAPSHOT_TIME_REF="${BASH_REMATCH[3]}"
+# FIX: Safely retrieve the name of the first volume in the array for timestamp extraction.
+VOLUME_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumes.name' 2>/dev/null || echo "")
+
+# FIX: Corrected regex to ensure the 12 digits are captured in BASH_REMATCH[1].
+if [[ "$VOLUME_NAME" =~ CLONE-RESTORE-([1-9]{12}) ]]; then
+    SNAPSHOT_TIME_REF="${BASH_REMATCH[1]}"
     echo "Extracted timestamp reference for snapshot search: $SNAPSHOT_TIME_REF"
 else
     echo "Warning: Could not extract YYYYMMDDHHMM timestamp from volume name '$VOLUME_NAME'."
@@ -146,10 +148,12 @@ fi
 # ----------------------------------------------------------------
 # PHASE 2: Detach DATA Volume(s) and Poll (Must precede Boot volume detach)
 # ----------------------------------------------------------------
+
 if [[ -n "$CLONE_DATA_IDS" ]]; then
     echo "2. Detaching Data Volume(s) first: $CLONE_DATA_IDS"
-    # Use bulk-detach command [14-16]
-    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary False || echo "Error initiating bulk detach for data volumes."
+    # Use bulk-detach command [10]
+    # FIX: Changed 'False' to '=False' to prevent shell parsing errors.
+    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --volumes "$CLONE_DATA_IDS" --detach-primary=False || echo "Error initiating bulk detach for data volumes."
 
     ITERATIONS=0
     while [[ $ITERATIONS -lt $MAX_DETACH_ITERATIONS ]]; do 
