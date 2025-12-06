@@ -20,21 +20,20 @@ echo "--- PowerVS Cleanup and Rollback Operation - Authentication and Volume Ide
 echo "1. Authenticating to IBM Cloud and targeting PowerVS instance..."
 
 # Login using API Key and set region
-# We use --no-wait where possible to speed up execution
-ibmcloud login --apikey "$API_KEY" -r "$REGION" --no-wait > /dev/null 2>&1 || {
+ibmcloud login --apikey "$API_KEY" -r "$REGION" > /dev/null 2>&1 || {
     echo "Authentication failed. Exiting."
     exit 1
 }
 
 # Target Resource Group
-ibmcloud target -g "$RESOURCE_GROUP_NAME" --no-wait > /dev/null 2>&1 || {
+ibmcloud target -g "$RESOURCE_GROUP_NAME" > /dev/null 2>&1 || {
     echo "Failed to target resource group $RESOURCE_GROUP_NAME. Exiting."
     exit 1
 }
 
 # Target PowerVS Workspace using CRN
-# Note: ibmcloud pi ws tg sets the context for all subsequent 'ibmcloud pi' commands
-ibmcloud pi ws tg "$PVS_CRN" --no-wait > /dev/null 2>&1 || {
+# Note: ibmcloud pi workspace target sets the context for all subsequent 'ibmcloud pi' commands
+ibmcloud pi workspace target "$PVS_CRN" > /dev/null 2>&1 || {
     echo "Failed to target PowerVS workspace $PVS_CRN. Exiting."
     exit 1
 }
