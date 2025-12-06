@@ -53,11 +53,15 @@ if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.[]')" ]; the
     exit 1
 fi
 
-# Extract Boot Volume ID (where "bootable" == true)
-BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootable == true) | .volumeID')
+# Extract Boot Volume ID (where "bootVolume" == true)
+# -r ensures raw output (no quotes around the UUID)
+BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootVolume == true) | .volumeID')
 
-# Extract Data Volume IDs (where "bootable" == false)
-DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootable == false) | .volumeID' | paste -sd "," -)
+# Extract Data Volume IDs (where "bootVolume" == false)
+# jq extracts IDs, paste joins them with commas for cleaner output
+DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
+
+
 
 
 # Check if BOOT_VOL was found (critical for rollback operation)
