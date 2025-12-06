@@ -14,7 +14,7 @@ JOB_SUCCESS=0
 #  Part 1:  Authentication and Volume Identification
 #---------------------------------------------------------
 
-echo "--- PowerVS Cleanup and Rollback Operation - Part 1 ---"
+echo "--- PowerVS Cleanup and Rollback Operation - Authentication and Volume Identification ---"
 
 # --- 1. Authenticate and Target Resources ---
 echo "1. Authenticating to IBM Cloud and targeting PowerVS instance..."
