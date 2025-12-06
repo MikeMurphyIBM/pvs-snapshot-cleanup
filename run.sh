@@ -120,8 +120,8 @@ if [[ "$LPAR_STATUS" != "SHUTOFF" ]]; then
     # Use immediate-shutdown operation (hard stop) [12, 13]
     ibmcloud pi instance action "$LPAR_NAME" --operation immediate-shutdown || echo "Warning: Failed to initiate immediate-shutdown."
 
-    # Define maximum wait time (5 minutes) and check interval
-MAX_WAIT=300
+    # Define maximum wait time (10 minutes) and check interval
+MAX_WAIT=600
 INTERVAL=10
 CURRENT_WAIT=0
 
@@ -189,7 +189,7 @@ if [[ -n "$CLONE_DATA_IDS" || -n "$CLONE_BOOT_ID" ]]; then
     # FIX 1: Updated descriptive output to reflect detachment of all volumes
     echo "2. Detaching ALL volumes (Data and Boot) from LPAR: $LPAR_NAME"
     # Bulk detach command remains correct for detaching both volumes simultaneously
-    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --detach-all True --detach-primary True || echo "Error initiating bulk detach for ALL volumes."
+    ibmcloud pi instance volume bulk-detach "$LPAR_NAME" --detach-all --detach-primary || echo "Error initiating bulk detach for ALL volumes."
 
     # FIX 2: Combine Boot and Data IDs for comprehensive checking
     ALL_CRITICAL_IDS="$CLONE_BOOT_ID,$CLONE_DATA_IDS"
