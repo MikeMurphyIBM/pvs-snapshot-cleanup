@@ -474,7 +474,7 @@ fi
 # OPTIONAL LPAR DELETE SECTION
 # --------------------------------------------------------------
 
-if [[ "$EXECUTE_LPAR_DELETE" == "true" ]]; then
+if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
     echo "User parameter EXECUTE_LPAR_DELETE=true — proceeding with DELETE..."
     echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
 
@@ -530,7 +530,7 @@ echo "LPAR Shutdown Complete        : Yes"
 echo "Vol Detach/Delete Completed   : Yes"
 echo "Snapshot Removed              : Yes"
 
-if [[ "$EXECUTE_LPAR_DELETE" == "true" ]]; then
+if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
     echo "LPAR Delete Requested         : Yes"
 else
     echo "LPAR Delete Requested         : No"
