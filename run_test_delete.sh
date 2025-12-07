@@ -1,10 +1,10 @@
 #!/bin/bash
 
-echo "==============================="
-echo " Job Stage: Cleanup"
-echo " Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-echo " Triggered By: Snapshot-Clone-Deploy"
-echo "==============================="
+echo "[SNAPSHOT-CLEANUP] ==============================="
+echo "[SNAPSHOT-CLEANUP] Job Stage Started"
+echo "[SNAPSHOT-CLEANUP] Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "[SNAPSHOT-CLEANUP] ==============================="
+
 
 
 
