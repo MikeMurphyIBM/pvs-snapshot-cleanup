@@ -447,6 +447,8 @@ fi
 
 
 # --- 3. Verification Loop ---
+
+# --- 3. Verification Loop ---
 CURRENT_TIME=0
 echo "Waiting up to ${SNAPSHOT_CHECK_MAX_TIME} seconds for snapshot deletion confirmation..."
 
@@ -468,105 +470,80 @@ if ! check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
 fi
 
 
-echo "--- Cleanup and Rollback Operation Complete.  Partition is ready for next Backup Operation ---"
+# --------------------------------------------------------------
+# OPTIONAL LPAR DELETE SECTION
+# --------------------------------------------------------------
 
-echo ""
-echo "--------------------------------------------"
-echo "Cleanup Summary:"
-echo "--------------------------------------------"
-echo "LPAR Shutdown        : Completed"
-echo "Volume Detach/Delete : Completed"
-echo "Snapshot Deleted     : Completed"
-echo "LPAR Ready For Backup: Yes"
-echo "--------------------------------------------"
-echo ""
+if [[ "$EXECUTE_LPAR_DELETE" == "true" ]]; then
+    echo "User parameter EXECUTE_LPAR_DELETE=true — proceeding with DELETE..."
+    echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
 
-# If execution reached this point, all operations succeeded
-JOB_SUCCESS=1
+    # Function to check if instance exists
+    check_instance_exists() {
+        ibmcloud pi ins get "$LPAR_NAME" > /dev/null 2>&1
+    }
 
-echo "Job Success Status: $JOB_SUCCESS"
+    DELETE_CHECK_MAX_TIME=300
+    CHECK_INTERVAL=60
+    CURRENT_TIME=0
 
-
-#--------------------------------------------------------------
-echo "Part 8: (Optional) LPAR Deletion"
-#--------------------------------------------------------------
-
-
-# Honor execution flag passed in from environment variables
-EXECUTE_LPAR_DELETE="${EXECUTE_LPAR_DELETE:-false}"
-
-if [[ "$EXECUTE_LPAR_DELETE" != "true" ]]; then
-    echo "Skipping LPAR deletion because EXECUTE_LPAR_DELETE=$EXECUTE_LPAR_DELETE"
-    JOB_SUCCESS=1
-    echo "--- Cleanup Complete ---"
-    echo "Final Job Success Status: $JOB_SUCCESS"
-    exit 0
-fi
-
-echo "User parameter EXECUTE_LPAR_DELETE=true — proceeding with DELETE..."
-
-
-echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
-
-# Function: return 0 if instance exists, 1 if gone
-check_instance_exists() {
-    ibmcloud pi ins get "$LPAR_NAME" > /dev/null 2>&1
-}
-
-# Maximum time (seconds) to wait for confirmed deletion
-DELETE_CHECK_MAX_TIME=300   # 5 minutes
-CHECK_INTERVAL=60           # Poll every 60 seconds
-
-# First, check whether instance is already gone (just in case)
-if ! check_instance_exists; then
-    echo "LPAR $LPAR_NAME is already deleted — skipping deletion."
-    JOB_SUCCESS=1
-    echo "--- Part 7 Complete ---"
-    echo "Final Job Success Status: $JOB_SUCCESS"
-    exit 0
-fi
-
-echo "Initiating permanent deletion for LPAR: $LPAR_NAME"
-
-if ! ibmcloud pi ins delete "$LPAR_NAME" -f; then
-    echo "ERROR: IBM Cloud rejected LPAR deletion request."
-    exit 8
-fi
-
-echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion..."
-echo "Checking every ${CHECK_INTERVAL}s..."
-
-while [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; do
     if ! check_instance_exists; then
-        echo "LPAR $LPAR_NAME confirmed deleted."
-        break
+        echo "LPAR $LPAR_NAME already deleted — skipping deletion."
+    else
+        echo "Initiating permanent deletion for LPAR: $LPAR_NAME"
+
+        if ! ibmcloud pi ins delete "$LPAR_NAME" -f; then
+            echo "ERROR: IBM Cloud rejected LPAR deletion request."
+            exit 8
+        fi
+
+        echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion..."
+        while [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; do
+            if ! check_instance_exists; then
+                echo "LPAR $LPAR_NAME confirmed deleted."
+                break
+            fi
+
+            echo "LPAR still exists. Time elapsed: ${CURRENT_TIME}s — retrying in ${CHECK_INTERVAL}s..."
+            sleep "$CHECK_INTERVAL"
+            CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
+        done
+
+        if check_instance_exists; then
+            echo "ERROR: LPAR still exists after timeout."
+            exit 8
+        fi
     fi
-
-    echo "LPAR still exists. Time elapsed: ${CURRENT_TIME}s — retrying in ${CHECK_INTERVAL}s..."
-    
-    sleep "$CHECK_INTERVAL"
-    CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
-done
-
-
-if [ "$LPAR_DELETED" -ne 0 ]; then
-    echo "ERROR: LPAR $LPAR_NAME was not fully deleted within ${DELETE_CHECK_MAX_TIME}s."
-    exit 8
 fi
 
-# After wait loop, final check:
-if check_instance_exists; then
-    echo "ERROR: LPAR $LPAR_NAME still exists after $DELETE_CHECK_MAX_TIME seconds."
-    exit 8
+
+# --------------------------------------------------------------
+# FINAL SUCCESS SUMMARY
+# --------------------------------------------------------------
+echo ""
+echo "====================================================="
+echo "[SNAPSHOT-CLEANUP] Final Stage Summary"
+echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "====================================================="
+
+echo "LPAR Shutdown Complete        : Yes"
+echo "Vol Detach/Delete Completed   : Yes"
+echo "Snapshot Removed              : Yes"
+
+if [[ "$EXECUTE_LPAR_DELETE" == "true" ]]; then
+    echo "LPAR Delete Requested         : Yes"
+else
+    echo "LPAR Delete Requested         : No"
 fi
 
-# Cleanup success — set status variable
+echo ""
+echo "[NEXT ACTION] Returning environment for next backup cycle"
+echo ""
+echo "[SNAPSHOT-CLEANUP] Final Result: SUCCESS"
+echo "====================================================="
+
 JOB_SUCCESS=1
-echo "LPAR deletion complete — cleanup successful!"
-echo "--- Part 8 Complete ---"
-echo "Final Job Success Status: $JOB_SUCCESS"
-
-
+exit 0
 
 
 
