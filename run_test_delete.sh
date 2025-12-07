@@ -1,5 +1,13 @@
 #!/bin/bash
 
+echo "==============================="
+echo " Job Stage: Cleanup"
+echo " Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo " Triggered By: Snapshot-Clone-Deploy"
+echo "==============================="
+
+
+
 # --- Environment Variables ---
 # Ensure these variables are passed into the Docker container or set prior to execution
 API_KEY="${IBMCLOUD_API_KEY}"
