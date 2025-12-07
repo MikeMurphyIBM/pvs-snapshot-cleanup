@@ -282,7 +282,7 @@ else
         # Attempt to proceed regardless of failure to initiate bulk detach
     }
     
-    DETACH_TIMEOUT_SECONDS=180
+    DETACH_TIMEOUT_SECONDS=240
     CURRENT_TIME=0
     
     echo "Waiting up to ${DETACH_TIMEOUT_SECONDS} seconds for all volumes to detach..."
@@ -325,7 +325,7 @@ echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
 #     fi
 # }
 
-DELETION_CHECK_MAX_TIME=120
+DELETION_CHECK_MAX_TIME=240
 SLEEP_INTERVAL=30
 
 # --- Initiate Concurrent Deletion of All Volumes ---
@@ -478,26 +478,28 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
     echo "User parameter EXECUTE_LPAR_DELETE=true — proceeding with DELETE..."
     echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
 
-    # Function to check if instance exists
+    # Function to check if instance still exists
     check_instance_exists() {
         ibmcloud pi ins get "$LPAR_NAME" > /dev/null 2>&1
     }
 
-    DELETE_CHECK_MAX_TIME=300
-    CHECK_INTERVAL=60
+    DELETE_CHECK_MAX_TIME=300   # 5 minutes
+    CHECK_INTERVAL=30
     CURRENT_TIME=0
 
+    # Check whether the LPAR has already been deleted
     if ! check_instance_exists; then
         echo "LPAR $LPAR_NAME already deleted — skipping deletion."
     else
         echo "Initiating permanent deletion for LPAR: $LPAR_NAME"
 
-        if ! ibmcloud pi ins delete "$LPAR_NAME" -f; then
+        if ! ibmcloud pi ins delete "$LPAR_NAME"; then
             echo "ERROR: IBM Cloud rejected LPAR deletion request."
             exit 8
         fi
 
-        echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion..."
+        echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion to complete..."
+
         while [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; do
             if ! check_instance_exists; then
                 echo "LPAR $LPAR_NAME confirmed deleted."
@@ -509,12 +511,14 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
             CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
         done
 
+        # Final check after loop ends
         if check_instance_exists; then
             echo "ERROR: LPAR still exists after timeout."
             exit 8
         fi
     fi
 fi
+
 
 
 # --------------------------------------------------------------
