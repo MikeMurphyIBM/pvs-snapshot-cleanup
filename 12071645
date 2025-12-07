@@ -1,0 +1,263 @@
+#!/bin/bash
+
+echo "[SNAPSHOT-CLEANUP] ==============================="
+echo "[SNAPSHOT-CLEANUP] Job Stage Started"
+echo "[SNAPSHOT-CLEANUP] Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "[SNAPSHOT-CLEANUP] ==============================="
+
+
+# ======================================================================
+# ENVIRONMENT VARIABLES
+# ======================================================================
+API_KEY="${IBMCLOUD_API_KEY}"
+REGION="us-south"
+RESOURCE_GROUP_NAME="Default"
+PVS_CRN="crn:v1:bluemix:public:power-iaas:dal10:a/21d74dd4fe814dfca20570bbb93cdbff:cc84ef2f-babc-439f-8594-571ecfcbe57a::"
+LPAR_NAME="empty-ibmi-lpar"
+
+
+# ======================================================================
+# STEP 1 — IBM CLOUD AUTH
+# ======================================================================
+echo ""
+echo "===== STEP 1 OF 7: AUTHENTICATION ====="
+
+ibmcloud login --apikey "$API_KEY" -r "$REGION" >/dev/null 2>&1 || { echo "Login failed"; exit 1; }
+ibmcloud target -g "$RESOURCE_GROUP_NAME" >/dev/null 2>&1 || { echo "Failed targeting RG"; exit 1; }
+ibmcloud pi workspace target "$PVS_CRN" >/dev/null 2>&1 || { echo "Failed targeting workspace"; exit 1; }
+
+echo "[OK] Authentication successful"
+
+
+# ======================================================================
+# STEP 2 — IDENTIFY VOLUMES FOR ROLLBACK
+# ======================================================================
+echo ""
+echo "===== STEP 2 OF 7: IDENTIFY CURRENT VOLUMES ====="
+
+VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]")
+
+BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume==true) | .volumeID')
+DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume==false) | .volumeID' | paste -sd "," -)
+
+if [[ -z "$BOOT_VOL" ]]; then
+    echo "CRITICAL: No boot volume found — cannot continue"
+    exit 1
+fi
+
+echo "Boot Volume: $BOOT_VOL"
+echo "Data Volumes: $DATA_VOLS"
+
+
+# ======================================================================
+# STEP 3 — SNAPSHOT IDENTIFICATION
+# ======================================================================
+echo ""
+echo "===== STEP 3 OF 7: SNAPSHOT IDENTIFICATION ====="
+
+BOOT_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.volumeID=="'"$BOOT_VOL"'") | .name')
+TIMESTAMP=$(echo "$BOOT_NAME" | grep -oE '[0-9]{12}')
+
+if [[ -z "$TIMESTAMP" ]]; then
+    echo "ERROR: No timestamp found — cannot match snapshot"
+    exit 1
+fi
+
+ALL_SNAPS=$(ibmcloud pi instance snapshot ls --json)
+MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS" | jq -r --arg T "$TIMESTAMP" '.snapshots[] | select(.name|test($T)) | .snapshotID' | head -1)
+
+if [[ -z "$MATCHING_SNAPSHOT_ID" ]]; then
+    echo "ERROR: Snapshot matching timestamp not found"
+    exit 1
+fi
+
+SNAPSHOT_NAME=$(echo "$ALL_SNAPS" | jq -r --arg T "$TIMESTAMP" '.snapshots[] | select(.name|test($T)) | .name' | head -1)
+
+echo "Snapshot to delete: $SNAPSHOT_NAME ($MATCHING_SNAPSHOT_ID)"
+
+
+# ======================================================================
+# STEP 4 — SHUTDOWN LPAR IF NECESSARY
+# ======================================================================
+echo ""
+echo "===== STEP 4 OF 7: ENSURE LPAR IS SHUTOFF ====="
+
+get_state() {
+    ibmcloud pi ins get "$LPAR_NAME" --json | jq -r '.status'
+}
+
+STATUS=$(get_state)
+STATUS_UPPER=$(echo "$STATUS" | tr '[:lower:]' '[:upper:]')
+
+if [[ "$STATUS_UPPER" == "ACTIVE" ]]; then
+    echo "[SNAPSHOT-CLEANUP] Initiating shutdown"
+    ibmcloud pi ins act "$LPAR_NAME" --operation immediate-shutdown >/dev/null 2>&1
+fi
+
+MAX_SHUT_WAIT=900
+ELAPSED=0
+
+while true; do
+    STATUS=$(get_state)
+    STATUS_UPPER=$(echo "$STATUS" | tr '[:lower:]' '[:upper:]')
+
+    if [[ "$STATUS_UPPER" == "SHUTOFF" ]]; then
+        echo "[OK] Shutdown confirmed"
+        break
+    fi
+
+    if (( ELAPSED >= MAX_SHUT_WAIT )); then
+        echo "ERROR: Shutdown timeout reached"
+        exit 1
+    fi
+
+    echo "[WAIT] LPAR still shutting down..."
+    sleep 30
+    ELAPSED=$((ELAPSED+30))
+done
+
+
+# ======================================================================
+# STEP 5 — DETACH IN CORRECT ORDER
+# ======================================================================
+echo ""
+echo "===== STEP 5 OF 7: DETACH VOLUMES ====="
+
+# Data FIRST  
+# Boot LAST
+
+echo "[DETACH] Running proper detach sequence"
+
+if [[ -n "$DATA_VOLS" ]]; then
+    IFS=',' read -ra ARR <<< "$DATA_VOLS"
+    for D in "${ARR[@]}"; do
+        echo "[DETACH] Data volume $D"
+        ibmcloud pi ins vol detach "$LPAR_NAME" --volume-id "$D" >/dev/null 2>&1
+    done
+fi
+
+echo "[DETACH] Boot volume $BOOT_VOL"
+ibmcloud pi ins vol detach "$LPAR_NAME" --volume-id "$BOOT_VOL" >/dev/null 2>&1
+
+
+echo "[WAIT] Waiting for all detach to finalize..."
+
+detach_complete() {
+    DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json)
+    COUNT=$(echo "$DATA" | jq '.volumes | length')
+    [[ "$COUNT" -eq 0 ]]
+}
+
+
+MAX_DETACH_WAIT=300
+ELAPSED=0
+
+while true; do
+    if detach_complete; then
+        echo "[OK] All volumes detached"
+        break
+    fi
+
+    if (( ELAPSED >= MAX_DETACH_WAIT )); then
+        echo "ERROR: Volumes failed to detach"
+        exit 1
+    fi
+
+    echo "[WAIT] Still detaching..."
+    sleep 30
+    ELAPSED=$((ELAPSED+30))
+done
+
+
+# ======================================================================
+# STEP 6 — DELETE VOLUMES
+# ======================================================================
+echo ""
+echo "===== STEP 6 OF 7: DELETE VOLUMES ====="
+
+echo "[DELETE] Boot volume $BOOT_VOL"
+ibmcloud pi vol delete "$BOOT_VOL" >/dev/null 2>&1
+
+if [[ -n "$DATA_VOLS" ]]; then
+    IFS=',' read -ra ARR <<< "$DATA_VOLS"
+    for D in "${ARR[@]}"; do
+        echo "[DELETE] Data volume $D"
+        ibmcloud pi vol delete "$D" >/dev/null 2>&1
+    done
+fi
+
+
+check_volume_deleted() {
+    local ID="$1"
+    ibmcloud pi vol get "$ID" >/dev/null 2>&1 && return 1 || return 0
+}
+
+MAX_VOL_DEL_WAIT=240
+INTERVAL=30
+
+verify_delete() {
+    local VOL_ID=$1
+    local T=0
+    while true; do
+        if check_volume_deleted "$VOL_ID"; then
+            echo "[OK] $VOL_ID deleted"
+            return 0
+        fi
+        if (( T >= MAX_VOL_DEL_WAIT )); then
+            echo "ERROR: $VOL_ID not deleted"
+            exit 1
+        fi
+        echo "[WAIT] $VOL_ID deletion pending..."
+        sleep $INTERVAL
+        T=$((T+INTERVAL))
+    done
+}
+
+echo "[VERIFY] Boot first"
+verify_delete "$BOOT_VOL"
+
+if [[ -n "$DATA_VOLS" ]]; then
+    IFS=',' read -ra ARR <<< "$DATA_VOLS"
+    for D in "${ARR[@]}"; do
+        verify_delete "$D"
+    done
+fi
+
+
+# ======================================================================
+# STEP 7 — DELETE SNAPSHOT (SAFE BECAUSE BACKUP SUCCESS OCCURRED)
+# ======================================================================
+echo ""
+echo "===== STEP 7 OF 7: DELETE SNAPSHOT ====="
+
+echo "[DELETE] Snapshot $SNAPSHOT_NAME ($MATCHING_SNAPSHOT_ID)"
+ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID" >/dev/null 2>&1
+
+check_snapshot_deleted() {
+    ibmcloud pi instance snapshot get "$1" >/dev/null 2>&1 && return 1 || return 0
+}
+
+ELAPSED=0
+MAX_SNAP_WAIT=600
+
+while true; do
+    if check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
+        echo "[OK] Snapshot deleted"
+        break
+    fi
+    if (( ELAPSED >= MAX_SNAP_WAIT )); then
+        echo "ERROR: Snapshot did not clear"
+        exit 1
+    fi
+    echo "[WAIT] Snapshot deletion in progress..."
+    sleep 30
+    ELAPSED=$((ELAPSED+30))
+done
+
+echo ""
+echo "=========================================================="
+echo "[FINAL RESULT] SUCCESSFUL CLEANUP"
+echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "=========================================================="
+
+exit 0
