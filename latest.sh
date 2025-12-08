@@ -131,21 +131,57 @@ if [ "$SNAP_COUNT" -eq 0 ]; then
     exit 4
 fi
 
-# Find matching snapshot ID
-MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
-    .snapshots[] | select(.name | test($TIMESTAMP)) | .snapshotID
-' | head -n 1)
+# Find matching snapshot ID-----temp hidden trying to account for a 1 second difference bw snapshot and volume (12:09-59 seconds and 12:10-00 seconds)
+#MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
+ #   .snapshots[] | select(.name | test($TIMESTAMP)) | .snapshotID
+#' | head -n 1)
 
 # Find matching snapshot NAME
-MATCHING_SNAPSHOT_NAME=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
-    .snapshots[] | select(.name | test($TIMESTAMP)) | .name
-' | head -n 1)
+#MATCHING_SNAPSHOT_NAME=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
+ #   .snapshots[] | select(.name | test($TIMESTAMP)) | .name
+#' | head -n 1)
 
 # Validate match
-if [[ -z "$MATCHING_SNAPSHOT_ID" ]] || [[ "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
-    echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
+#if [[ -z "$MATCHING_SNAPSHOT_ID" ]] || [[ "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
+ #   echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
+  #  exit 4
+#fi
+
+#this next block is a trial to try and identify by seconds
+THRESHOLD_SECONDS=120
+
+MATCHING_SNAPSHOT_ID=""
+MATCHING_SNAPSHOT_NAME=""
+
+# Convert clone timestamp to epoch seconds
+CLONE_TS_EPOCH=$(date -d "${TIMESTAMP:0:8} ${TIMESTAMP:8:2}:${TIMESTAMP:10:2}" +%s)
+
+while IFS="|" read SNAP_NAME SNAP_ID; do
+    SNAP_TS=$(echo "$SNAP_NAME" | grep -oE '[0-9]{12}')
+    [[ -z "$SNAP_TS" ]] && continue
+
+    SNAP_TS_EPOCH=$(date -d "${SNAP_TS:0:8} ${SNAP_TS:8:2}:${SNAP_TS:10:2}" +%s)
+
+    DIFF=$(( CLONE_TS_EPOCH - SNAP_TS_EPOCH ))
+    DIFF=${DIFF#-}
+
+    if (( DIFF <= THRESHOLD_SECONDS )); then
+        MATCHING_SNAPSHOT_ID="$SNAP_ID"
+        MATCHING_SNAPSHOT_NAME="$SNAP_NAME"
+        break
+    fi
+done < <(echo "$ALL_SNAPS_JSON" | jq -r '.snapshots[] | .name + "|" + .snapshotID')
+
+if [[ -z "$MATCHING_SNAPSHOT_ID" ]]; then
+    echo "ERROR: No snapshot found within acceptable timestamp tolerance of $TIMESTAMP"
     exit 4
 fi
+#trial block ends
+
+echo "MATCH FOUND:"
+echo "Snapshot Name: $MATCHING_SNAPSHOT_NAME"
+echo "Snapshot ID:   $MATCHING_SNAPSHOT_ID"
+
 
 echo "--------------------------------------------"
 echo "Snapshot Match Found (Rollback Target)"
