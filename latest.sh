@@ -388,7 +388,11 @@ if [[ -n "$DATA_VOLS" ]]; then
         echo " -- Initiating delete for Data Volume: $DATA_VOL_ID"
         # Execute deletion request without waiting
         ibmcloud pi vol delete "$DATA_VOL_ID" || echo "Warning: Command to delete $DATA_VOL_ID returned a non-zero code."
+
     done
+
+     echo "Allowing time for volume deletion operation to propagate..."
+     sleep 60
 else
     echo "No data volumes identified for deletion."
 fi
