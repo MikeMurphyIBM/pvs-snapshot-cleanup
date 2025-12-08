@@ -217,6 +217,9 @@ wait_for_status() {
     local target_state=$2
     local current_time=0
 
+    echo "Allowing 60-second initialization delay.."
+    sleep 60
+
     echo "Waiting up to ${max_time} seconds for LPAR to reach state: ${target_state}"
 
     while [ "$current_time" -lt "$max_time" ]; do
@@ -313,10 +316,15 @@ else
     echo "Executing bulk detach operation for all volumes on $LPAR_NAME..."
     
     # Detach all volumes including the primary/boot volume
-    ibmcloud pi ins vol bulk-detach "$LPAR_NAME" --detach-all --detach-primary || {
-        echo "Warning: Bulk detach command failed to initiate. Check manually."
+    if ! ibmcloud pi ins vol bulk-detach "$LPAR_NAME" --detach-all --detach-primary; then
+       echo "Warning: Bulk detach command failed to initiate. Check manually."
         # Attempt to proceed regardless of failure to initiate bulk detach
-    }
+    fi 
+
+    echo "Allowing time for detach operation to propagate"
+    sleep 120
+
+
     
     DETACH_TIMEOUT_SECONDS=240
     CURRENT_TIME=0
