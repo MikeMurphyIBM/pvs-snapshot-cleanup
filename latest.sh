@@ -1,32 +1,37 @@
 #!/bin/bash
 
+########################################################################
+# SELECT MODE — only ONE of these should be uncommented
+########################################################################
 
-## Timestamp System Setup
-#####################################################
-# MODE 1 — log_print ONLY
-# (quiet execution: NO echo, NO errors, NO command output)
-#####################################################
-# To enable quiet mode, UNCOMMENT all 3 lines below:
-#
-# exec >/dev/null 2>&1
-# log_print() {
-#     printf "%s %s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$1"
-# }
-#
-# NOTE: In quiet mode, timestamps appear ONLY for log_print()
+MODE="normal"    # Shows everything (recommended for CE runs)
+#MODE="quiet"     # Only log_print messages show
 
 
-#####################################################
-# MODE 2 — log_print + echo + errors (normal mode)
-#####################################################
-# >>> LEAVE THESE LINES UNCOMMENTED FOR FULL OUTPUT <<<
-# This will timestamp everything printed to stdout & stderr
-exec > >(tee /proc/1/fd/1 | awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }') \
-     2> >(tee /proc/1/fd/2 | awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }')
+########################################################################
+# QUIET MODE — hides everything except log_print output
+########################################################################
+if [[ "$MODE" == "quiet" ]]; then
+    exec >/dev/null 2>&1
+    log_print() {
+        printf "%s %s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$1"
+    }
+fi
 
-log_print() {
-    printf "%s\n" "$1"
-}
+
+########################################################################
+# NORMAL MODE — timestamps everything printed (stdout + stderr)
+########################################################################
+if [[ "$MODE" == "normal" ]]; then
+    exec > >(tee /proc/1/fd/1 | awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }') \
+         2> >(tee /proc/1/fd/2 | awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }')
+
+    log_print() {
+        printf "%s\n" "$1"
+    }
+fi
+
+
 
      
 
