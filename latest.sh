@@ -557,7 +557,6 @@ fi
 echo ""
 echo "====================================================="
 echo "[SNAPSHOT-CLEANUP] Final Stage Summary"
-echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 echo "====================================================="
 
 echo "LPAR Shutdown Complete        : Yes"
