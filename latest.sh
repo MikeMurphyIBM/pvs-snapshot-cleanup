@@ -1,9 +1,37 @@
 #!/bin/bash
 
-echo "[SNAPSHOT-CLEANUP] ==============================="
-echo "[SNAPSHOT-CLEANUP] Job Stage Started"
-echo "[SNAPSHOT-CLEANUP] Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-echo "[SNAPSHOT-CLEANUP] ==============================="
+exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }') \
+     2> >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }' >&2)
+
+
+
+##trying epoch and normal 12-08 1:16
+#####################################################
+# MODE 1 — log_print ONLY
+# (quiet execution: NO echo, NO errors, NO command output)
+#####################################################
+
+# Uncomment BOTH lines below to activate this mode:
+#exec >/dev/null 2>&1
+# log_print() {
+#   printf "%s\n" "$1"
+#}
+
+
+#####################################################
+# MODE 2 — log_print + echo + errors (normal mode)
+#####################################################
+
+# >>> LEAVE THESE LINES UNCOMMENTED FOR FULL OUTPUT <<<
+log_print() {
+    printf "%s\n" "$1"
+}
+     
+
+log_print "========================================================================="
+log_print "Job 3:  Environment Cleanup/Rollback post Backup Operations"
+log_print "========================================================================="
+log_print ""
 
 
 
@@ -16,6 +44,7 @@ RESOURCE_GROUP_NAME="Default"
 PVS_CRN="crn:v1:bluemix:public:power-iaas:dal10:a/21d74dd4fe814dfca20570bbb93cdbff:cc84ef2f-babc-439f-8594-571ecfcbe57a::"
 CLOUD_INSTANCE_ID="cc84ef2f-babc-439f-8594-571ecfcbe57a"
 LPAR_NAME="empty-ibmi-lpar"
+SNAPSHOT_NAME="murph-$(date +"%Y%m%d%H%M")"
 JOB_SUCCESS=0
 
 #--------------------------------------------------------------
@@ -99,31 +128,27 @@ echo ""
 echo "Part 3 of 7:  Snapshot Identification"
 #--------------------------------------------------------------
 
-# --- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Identification ---"
 
-# 1. Extract the full volume name string based on the known Boot Volume ID
+# 1. Get the boot volume's name (we already know BOOT_VOL from Step 2)
 BOOT_VOL_NAME=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.volumeID == "'"$BOOT_VOL"'") | .name')
 
-echo "Fetching metadata for Volume ID: $BOOT_VOL..."
-echo "Extracted volume name: $BOOT_VOL_NAME"
+echo "Boot volume name: $BOOT_VOL_NAME"
 
-# 2. Extract the 12-digit timestamp (YYYYMMDDhhmm) using grep for robust pattern matching
-# The volume name structure ("clone-CLONE-RESTORE-202512051232-2") contains the critical timestamp
-TIMESTAMP=$(echo "$BOOT_VOL_NAME" | grep -oE '[0-9]{12}')
+# 2. Extract the 12-digit timestamp (YYYYMMDDHHMM) from the boot volume name
+TIMESTAMP=$(echo "$BOOT_VOL_NAME" | grep -oE '[0-9]{12}' | head -n 1)
 
-# If extraction failed, exit with the correlation error
 if [ -z "$TIMESTAMP" ]; then
-    echo "ERROR: No valid 12-digit timestamp found in volume name for correlation."
+    echo "ERROR: No valid 12-digit timestamp found in boot volume name: $BOOT_VOL_NAME"
     exit 1
 fi
 
-echo "Extracted timestamp: $TIMESTAMP"
+echo "Extracted timestamp from boot volume name: $TIMESTAMP"
+
 
 echo "Fetching snapshot list across the workspace..."
 ALL_SNAPS_JSON=$(ibmcloud pi instance snapshot ls --json 2>/dev/null || echo "{}")
 
-# Count snapshots
 SNAP_COUNT=$(echo "$ALL_SNAPS_JSON" | jq '.snapshots | length')
 
 if [ "$SNAP_COUNT" -eq 0 ]; then
@@ -131,64 +156,38 @@ if [ "$SNAP_COUNT" -eq 0 ]; then
     exit 4
 fi
 
-# Find matching snapshot ID-----temp hidden trying to account for a 1 second difference bw snapshot and volume (12:09-59 seconds and 12:10-00 seconds)
-#MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
- #   .snapshots[] | select(.name | test($TIMESTAMP)) | .snapshotID
-#' | head -n 1)
+echo "Matching snapshot using timestamp: $TIMESTAMP"
 
-# Find matching snapshot NAME
-#MATCHING_SNAPSHOT_NAME=$(echo "$ALL_SNAPS_JSON" | jq -r --arg TIMESTAMP "$TIMESTAMP" '
- #   .snapshots[] | select(.name | test($TIMESTAMP)) | .name
-#' | head -n 1)
+# Find snapshot where name begins with "murph-TIMESTAMP"
+MATCHING_SNAPSHOT_ID=$(echo "$ALL_SNAPS_JSON" \
+    | jq -r --arg TS "$TIMESTAMP" '
+        .snapshots[]
+        | select(.name | test("^murph-" + $TS))
+        | .snapshotID
+    ' | head -n 1)
 
-# Validate match
-#if [[ -z "$MATCHING_SNAPSHOT_ID" ]] || [[ "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
- #   echo "ERROR: No snapshot found matching timestamp $TIMESTAMP in the workspace. Cannot determine rollback target."
-  #  exit 4
-#fi
+MATCHING_SNAPSHOT_NAME=$(echo "$ALL_SNAPS_JSON" \
+    | jq -r --arg TS "$TIMESTAMP" '
+        .snapshots[]
+        | select(.name | test("^murph-" + $TS))
+        | .name
+    ' | head -n 1)
 
-#this next block is a trial to try and identify by seconds
-THRESHOLD_SECONDS=120
-
-MATCHING_SNAPSHOT_ID=""
-MATCHING_SNAPSHOT_NAME=""
-
-# Convert clone timestamp to epoch seconds
-CLONE_TS_EPOCH=$(date -d "${TIMESTAMP:0:8} ${TIMESTAMP:8:2}:${TIMESTAMP:10:2}" +%s)
-
-while IFS="|" read SNAP_NAME SNAP_ID; do
-    SNAP_TS=$(echo "$SNAP_NAME" | grep -oE '[0-9]{12}')
-    [[ -z "$SNAP_TS" ]] && continue
-
-    SNAP_TS_EPOCH=$(date -d "${SNAP_TS:0:8} ${SNAP_TS:8:2}:${SNAP_TS:10:2}" +%s)
-
-    DIFF=$(( CLONE_TS_EPOCH - SNAP_TS_EPOCH ))
-    DIFF=${DIFF#-}
-
-    if (( DIFF <= THRESHOLD_SECONDS )); then
-        MATCHING_SNAPSHOT_ID="$SNAP_ID"
-        MATCHING_SNAPSHOT_NAME="$SNAP_NAME"
-        break
-    fi
-done < <(echo "$ALL_SNAPS_JSON" | jq -r '.snapshots[] | .name + "|" + .snapshotID')
-
-if [[ -z "$MATCHING_SNAPSHOT_ID" ]]; then
-    echo "ERROR: No snapshot found within acceptable timestamp tolerance of $TIMESTAMP"
-    exit 4
+# >>> Validation block <<<
+if [[ -z "$MATCHING_SNAPSHOT_ID" || "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
+    echo "Snapshot corresponding to timestamp $TIMESTAMP no longer exists."
+    echo "Proceeding as normal."
+else
+    echo "MATCH FOUND:"
+    echo "Snapshot Name: $MATCHING_SNAPSHOT_NAME"
+    echo "Snapshot ID:   $MATCHING_SNAPSHOT_ID"
 fi
-#trial block ends
-
-echo "MATCH FOUND:"
-echo "Snapshot Name: $MATCHING_SNAPSHOT_NAME"
-echo "Snapshot ID:   $MATCHING_SNAPSHOT_ID"
-
 
 echo "--------------------------------------------"
-echo "Snapshot Match Found (Rollback Target)"
-echo "Snapshot ID:      $MATCHING_SNAPSHOT_ID"
-echo "Snapshot Name:    $MATCHING_SNAPSHOT_NAME"
-echo "Timestamp Match:  $TIMESTAMP"
+echo "Snapshot Identification Complete"
+echo "Timestamp extracted: $TIMESTAMP"
 echo "--------------------------------------------"
+
 
 
 echo "--- Part 3 of 7 Complete ---"
@@ -198,111 +197,79 @@ echo ""
 echo "Part 4 of 7:  LPAR Shutdown"
 #--------------------------------------------------------------
 
-# Exit immediately if a command exits with a non-zero status
 set -e
 set -o pipefail
 
 echo "--- PowerVS Cleanup and Rollback Operation - LPAR Shutdown ---"
 
-# --- Utility Functions ---
-
-# Function to check LPAR status (Shutoff/Active)
+# Utility: Check instance status
 get_lpar_status() {
     ibmcloud pi ins get "$LPAR_NAME" --json 2>/dev/null | jq -r '.status'
 }
 
-# Function to wait for an expected status
+# Utility: Wait for state transition
 wait_for_status() {
     local max_time=$1
     local target_state=$2
     local current_time=0
 
-    echo "Allowing 60-second initialization delay.."
-    sleep 60
-
-    echo "Waiting up to ${max_time} seconds for LPAR to reach state: ${target_state}"
+    echo "Waiting up to ${max_time}s for LPAR to reach state: ${target_state}"
 
     while [ "$current_time" -lt "$max_time" ]; do
-        STATUS=$(get_lpar_status)
-        echo "Current LPAR status: $STATUS (Time elapsed: ${current_time}s)"
+        STATUS=$(get_lpar_status | tr '[:lower:]' '[:upper:]')
+        echo "Current LPAR status: $STATUS (elapsed ${current_time}s)"
 
-        if [ "$STATUS" == "$target_state" ]; then
-            echo "LPAR reached ${target_state} state."
-            return 0 # Success
+        if [[ "$STATUS" == "$target_state" ]]; then
+            echo "LPAR reached ${target_state} state successfully."
+            return 0
         fi
 
         sleep 20
         current_time=$((current_time + 20))
     done
 
-    echo "Error: LPAR failed to reach $target_state within ${max_time} seconds."
-    return 1 # Failure
-}
-
-
-# Function to check if volumes are detached
-check_volumes_detached() {
-    VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "{}")
-
-    # Check if .volumes array exists and has elements
-    if [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]?')" ]; then
-        return 0  # Success: No volumes attached
-    else
-        return 1  # Failure: Volumes still attached
-    fi
-}
-
-
-# Function to check if a specific volume is successfully deleted
-check_volume_deleted() {
-    local volume_id=$1
-    
-    # Attempt to get volume details. Expect this command to fail (return non-zero status) if the volume is gone.
-    # We suppress standard output and only rely on stderr/exit code.
-    if ibmcloud pi vol get "$volume_id" > /dev/null 2>&1; then
-        return 1 # Failure: Volume still exists (command succeeded)
-    else
-        # Command failed (expected behavior for a deleted resource)
-        return 0 # Success: Volume appears deleted
-    fi
+    echo "WARNING: LPAR did not reach ${target_state} in allowed time."
+    return 1
 }
 
 echo "--- Initiating LPAR Shutdown ---"
 
-# Normalize the status returned
 CURRENT_STATUS=$(get_lpar_status | tr '[:lower:]' '[:upper:]')
 echo "Initial LPAR status: $CURRENT_STATUS"
 
-# Shutdown is needed whenever LPAR is NOT shutoff/off
+# Shutdown only if running
 if [[ "$CURRENT_STATUS" != "SHUTOFF" && "$CURRENT_STATUS" != "OFF" ]]; then
-    echo "Shutdown required. Sending immediate shutdown..."
+    echo "Sending shutdown command..."
 
+    # Try immediate shutdown
     if ! ibmcloud pi ins act "$LPAR_NAME" --operation immediate-shutdown; then
-        echo "Immediate shutdown failed. Attempting graceful shutdown..."
-
-        if ! ibmcloud pi ins act "$LPAR_NAME" --operation stop; then
-            echo "Shutdown commands failed. Exiting."
+        echo "Immediate shutdown failed — trying graceful stop"
+        ibmcloud pi ins act "$LPAR_NAME" --operation stop || {
+            echo "ERROR: Shutdown commands failed — cannot continue safely"
             exit 1
-        fi
+        }
     fi
 else
-    echo "Skipping shutdown — LPAR already powered off: $CURRENT_STATUS"
+    echo "Skipping shutdown — LPAR is already in a stopped state"
 fi
 
-sleep 10
+# Give PowerVS time to settle status sync
+sleep 45
 
 UPDATED_STATUS=$(get_lpar_status | tr '[:lower:]' '[:upper:]')
 echo "Status after shutdown command: $UPDATED_STATUS"
 
+# Confirm transition
 if [[ "$UPDATED_STATUS" != "SHUTOFF" && "$UPDATED_STATUS" != "OFF" ]]; then
-    echo "LPAR still shutting down — waiting..."
-
+    echo "Shutdown still in progress — waiting..."
+    # Wait a full 10 minutes
     wait_for_status 600 "SHUTOFF" || {
-        echo "WARNING: LPAR did not fully reach SHUTOFF state — continuing cautiously."
+        echo "WARNING: LPAR still reporting active — proceeding cautiously."
     }
 fi
 
-echo "LPAR verified ready for volume operations."
+echo "LPAR is now ready for storage detachment and rollback operations."
+
 
 #--------------------------------------------------------------
 echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
