@@ -99,11 +99,16 @@ VOLUME_DATA=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "[]
 #echo "Raw VOLUME_DATA received:"
 #echo "$VOLUME_DATA"
 
-# If volume data retrieval failed or returned empty results
 if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]')" ]; then
-    echo "Error: Could not retrieve volume data or no volumes found for $LPAR_NAME. Exiting."
-    exit 1
+    echo "INFO: No volumes currently attached to $LPAR_NAME."
+    echo "INFO: Continuing cleanup assuming prior detach succeeded."
+    BOOT_VOL=""
+    DATA_VOLS=""
+else
+    BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == true) | .volumeID')
+    DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
 fi
+
 
 # Extract Boot Volume ID (where "bootVolume" == true)
 BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == true) | .volumeID')
@@ -279,9 +284,14 @@ echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
 
 echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
 
-if check_volumes_detached; then
+if [[ -z "$BOOT_VOL" && -z "$DATA_VOLS" ]]; then
+    echo "INFO: No volumes discovered earlier — assuming detachment already occurred."
+elif check_volumes_detached; then
     echo "Volume check complete: No volumes currently attached to $LPAR_NAME."
 else
+
+
+
     echo "Executing bulk detach operation for all volumes on $LPAR_NAME..."
     
     # Detach all volumes including the primary/boot volume
@@ -324,6 +334,7 @@ echo "Volume detachment finalized, ready for deletion."
 echo "Part 5 of 7 complete"
 
 #--------------------------------------------------------------
+#--------------------------------------------------------------
 echo "Part 6 of 7:  Storage Volume Deletion"
 #--------------------------------------------------------------
 
@@ -332,80 +343,113 @@ echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes ---"
 DELETION_CHECK_MAX_TIME=240
 SLEEP_INTERVAL=30
 
-# Prepare array whether DATA_VOLS contains values or not
-IFS=',' read -r -a DATA_VOL_ARRAY <<< "$DATA_VOLS"
-
-# --- Initiate deletion for Boot Volume ---
-echo "Initiating deletion for Boot Volume: $BOOT_VOL"
-ibmcloud pi vol delete "$BOOT_VOL" || echo "Warning: delete request returned non-zero for $BOOT_VOL"
-
-# --- Initiate deletion for Data Volumes ---
-if [[ ${#DATA_VOL_ARRAY[@]} -gt 0 ]]; then
-    echo "Initiating deletion for Data Volume(s)..."
-    for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
-        [[ -z "$DATA_VOL_ID" ]] && continue
-        echo " -- Deleting Data Volume: $DATA_VOL_ID"
-        ibmcloud pi vol delete "$DATA_VOL_ID" || echo "Warning: delete request returned non-zero for $DATA_VOL_ID"
-    done
-
-    echo "Allowing time for deletion commands to propagate..."
-    sleep 60
+# Check if there is anything to do BEFORE executing any deletes
+if [[ -z "$BOOT_VOL" && -z "$DATA_VOLS" ]]; then
+    echo "INFO: No volumes detected earlier — skipping volume deletion."
+    echo "--- Part 6 of 7 Complete ---"
+    echo ""
+    # Continue script flow
+    :
 else
-    echo "No data volumes identified for deletion."
+    echo "Volumes detected — proceeding with deletion operations."
 fi
 
-# --- Verify Boot Volume deletion ---
-echo "Verifying deletion for Boot Volume: $BOOT_VOL"
-CURRENT_TIME=0
-BOOT_VOL_DELETED=1
 
-while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]; do
-    if check_volume_deleted "$BOOT_VOL"; then
-        echo "Boot Volume $BOOT_VOL successfully deleted."
-        BOOT_VOL_DELETED=0
-        break
+# Only run the logic below if at least one volume exists
+if [[ -n "$BOOT_VOL" || -n "$DATA_VOLS" ]]; then
+
+    # Prepare array even if empty
+    IFS=',' read -r -a DATA_VOL_ARRAY <<< "$DATA_VOLS"
+
+    # --- Initiate deletion for Boot Volume ---
+    if [[ -n "$BOOT_VOL" ]]; then
+        echo "Initiating deletion for Boot Volume: $BOOT_VOL"
+        ibmcloud pi vol delete "$BOOT_VOL" || \
+            echo "Warning: delete request returned non-zero for $BOOT_VOL"
+    else
+        echo "No boot volume detected — skipping boot volume deletion"
     fi
 
-    sleep "$SLEEP_INTERVAL"
-    CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
-    echo "Waiting for Boot Volume deletion (elapsed ${CURRENT_TIME}s)"
-done
 
-if [ "$BOOT_VOL_DELETED" -ne 0 ]; then
-    echo "ERROR: Boot Volume $BOOT_VOL did not delete in ${DELETION_CHECK_MAX_TIME}s. Exiting."
-    exit 6
-fi
+    # --- Initiate deletion for Data Volumes ---
+    if [[ ${#DATA_VOL_ARRAY[@]} -gt 0 ]]; then
+        echo "Initiating deletion for Data Volume(s)..."
+        for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
+            [[ -z "$DATA_VOL_ID" ]] && continue
+            echo " -- Deleting Data Volume: $DATA_VOL_ID"
+            ibmcloud pi vol delete "$DATA_VOL_ID" || \
+                echo "Warning: delete request returned non-zero for $DATA_VOL_ID"
+        done
+
+        echo "Allowing time for deletion commands to propagate..."
+        sleep 60
+    else
+        echo "No data volumes identified for deletion."
+    fi
 
 
-# --- Verify Data Volumes deletion ---
-if [[ ${#DATA_VOL_ARRAY[@]} -gt 0 ]]; then
-    echo "Verifying deletion of Data Volume(s)..."
-
-    for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
-        [[ -z "$DATA_VOL_ID" ]] && continue
-
+    # --- Verify Boot Volume deletion ---
+    if [[ -n "$BOOT_VOL" ]]; then
+        echo "Verifying deletion for Boot Volume: $BOOT_VOL"
         CURRENT_TIME=0
-        DATA_VOL_DELETED=1
+        BOOT_VOL_DELETED=1
 
         while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]; do
-            if check_volume_deleted "$DATA_VOL_ID"; then
-                echo "Data Volume $DATA_VOL_ID successfully deleted."
-                DATA_VOL_DELETED=0
+            if check_volume_deleted "$BOOT_VOL"; then
+                echo "Boot Volume $BOOT_VOL successfully deleted."
+                BOOT_VOL_DELETED=0
                 break
             fi
             
             sleep "$SLEEP_INTERVAL"
             CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
-            echo "Waiting for $DATA_VOL_ID deletion (elapsed ${CURRENT_TIME}s)"
+            echo "Waiting for Boot Volume deletion (elapsed ${CURRENT_TIME}s)"
         done
 
-        if [ "$DATA_VOL_DELETED" -ne 0 ]; then
-            echo "Warning: Could not verify deletion of Data Volume $DATA_VOL_ID within ${DELETION_CHECK_MAX_TIME}s."
+        if [ "$BOOT_VOL_DELETED" -ne 0 ]; then
+            echo "Warning: Boot Volume $BOOT_VOL was not confirmed deleted."
         fi
-    done
-else
-    echo "Skipping verification — No data volumes existed."
+    fi
+
+
+    # --- Verify Data Volumes deletion ---
+    if [[ ${#DATA_VOL_ARRAY[@]} -gt 0 ]]; then
+        echo "Verifying deletion of Data Volume(s)..."
+
+        for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
+            [[ -z "$DATA_VOL_ID" ]] && continue
+
+            CURRENT_TIME=0
+            DATA_VOL_DELETED=1
+
+            while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]]; do
+                if check_volume_deleted "$DATA_VOL_ID"; then
+                    echo "Data Volume $DATA_VOL_ID successfully deleted."
+                    DATA_VOL_DELETED=0
+                    break
+                fi
+
+                sleep "$SLEEP_INTERVAL"
+                CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
+                echo "Waiting for $DATA_VOL_ID deletion (elapsed ${CURRENT_TIME}s)"
+            done
+
+            if [ "$DATA_VOL_DELETED" -ne 0 ]; then
+                echo "Warning: Could not verify deletion of Data Volume $DATA_VOL_ID within ${DELETION_CHECK_MAX_TIME}s."
+            fi
+        done
+    else
+        echo "Skipping data volume verification — none were found."
+    fi
 fi
+
+
+echo "------------------------------------"
+echo "Storage Volume Deletion Completed"
+echo "------------------------------------"
+echo "--- Part 6 of 7 Complete ---"
+echo ""
+
 
 
 echo "------------------------------------"
