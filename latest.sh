@@ -307,12 +307,15 @@ else
         sleep 20
         CURRENT_TIME=$((CURRENT_TIME + 20))
 
-        if [ "$CURRENT_TIME" -ge "$DETACH_TIMEOUT_SECONDS" ]; then
+        echo "Waiting for volumes to detach (Time elapsed: ${CURRENT_TIME}s)"
+     done
+
+     if [ "$CURRENT_TIME" -ge "$DETACH_TIMEOUT_SECONDS" ]; then
             echo "Error: Volumes failed to detach within ${DETACH_TIMEOUT_SECONDS} seconds. Exiting."
             exit 1
-        fi
-        echo "Waiting for volumes to detach (Time elapsed: ${CURRENT_TIME}s)"
-    done
+     fi
+     
+    
 fi
 
 echo "Volume detachment finalized, ready for deletion."
@@ -322,50 +325,35 @@ echo "Part 5 of 7 complete"
 echo "Part 6 of 7:  Storage Volume Deletion"
 #--------------------------------------------------------------
 
-echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes---"
-
-# --- Utility Function assumed from prior parts ---
-# Function to check if a specific volume is successfully deleted
-# check_volume_deleted() {
-#     local volume_id=$1
-#     # Attempt to get volume details. Expect this command to fail (return non-zero status) if the volume is gone.
-#     if ibmcloud pi vol get "$volume_id" > /dev/null 2>&1; then
-#         return 1 # Failure: Volume still exists (command succeeded)
-#     else
-#         return 0 # Success: Volume appears deleted (command failed)
-#     fi
-# }
+echo "--- PowerVS Cleanup and Rollback Operation - Deleting Volumes ---"
 
 DELETION_CHECK_MAX_TIME=240
 SLEEP_INTERVAL=30
 
-# --- Initiate Concurrent Deletion of All Volumes ---
+# Prepare array whether DATA_VOLS contains values or not
+IFS=',' read -r -a DATA_VOL_ARRAY <<< "$DATA_VOLS"
+
+# --- Initiate deletion for Boot Volume ---
 echo "Initiating deletion for Boot Volume: $BOOT_VOL"
-# Initiate delete request for Boot Volume immediately
-ibmcloud pi vol delete "$BOOT_VOL" || echo "Warning: Command to delete $BOOT_VOL returned a non-zero code."
+ibmcloud pi vol delete "$BOOT_VOL" || echo "Warning: delete request returned non-zero for $BOOT_VOL"
 
-# Check if DATA_VOLS are present and initiate deletion for each
-if [[ -n "$DATA_VOLS" ]]; then
-    echo "Initiating concurrent deletion for Data Volume(s)..."
-    # Split the comma-separated string into an array of IDs
-    IFS=',' read -r -a DATA_VOL_ARRAY <<< "$DATA_VOLS"
-
+# --- Initiate deletion for Data Volumes ---
+if [[ ${#DATA_VOL_ARRAY[@]} -gt 0 ]]; then
+    echo "Initiating deletion for Data Volume(s)..."
     for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
-        if [[ -z "$DATA_VOL_ID" ]]; then continue; fi # Skip if empty
-        echo " -- Initiating delete for Data Volume: $DATA_VOL_ID"
-        # Execute deletion request without waiting
-        ibmcloud pi vol delete "$DATA_VOL_ID" || echo "Warning: Command to delete $DATA_VOL_ID returned a non-zero code."
-
+        [[ -z "$DATA_VOL_ID" ]] && continue
+        echo " -- Deleting Data Volume: $DATA_VOL_ID"
+        ibmcloud pi vol delete "$DATA_VOL_ID" || echo "Warning: delete request returned non-zero for $DATA_VOL_ID"
     done
 
-     echo "Allowing time for volume deletion operation to propagate..."
-     sleep 60
+    echo "Allowing time for deletion commands to propagate..."
+    sleep 60
 else
     echo "No data volumes identified for deletion."
 fi
 
-# --- Verification: Wait for Boot Volume deletion (Max 120s) ---
-echo "3. Verifying deletion status for Boot Volume: $BOOT_VOL"
+# --- Verify Boot Volume deletion ---
+echo "Verifying deletion for Boot Volume: $BOOT_VOL"
 CURRENT_TIME=0
 BOOT_VOL_DELETED=1
 
@@ -378,21 +366,22 @@ while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]; do
 
     sleep "$SLEEP_INTERVAL"
     CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
-    echo "Waiting for $BOOT_VOL deletion (Time elapsed: ${CURRENT_TIME}s)"
+    echo "Waiting for Boot Volume deletion (elapsed ${CURRENT_TIME}s)"
 done
 
 if [ "$BOOT_VOL_DELETED" -ne 0 ]; then
-    echo "ERROR: Boot Volume $BOOT_VOL could not be confirmed deleted within ${DELETION_CHECK_MAX_TIME} seconds. Exiting cleanup."
-    exit 6 # Critical failure, stopping script
+    echo "ERROR: Boot Volume $BOOT_VOL did not delete in ${DELETION_CHECK_MAX_TIME}s. Exiting."
+    exit 6
 fi
 
-# --- Verification: Wait for Data Volumes deletion (Max 120s) ---
-if [[ -n "$DATA_VOLS" ]]; then
-    echo "4. Verifying deletion status for Data Volume(s)..."
-    
+
+# --- Verify Data Volumes deletion ---
+if [[ ${#DATA_VOL_ARRAY[@]} -gt 0 ]]; then
+    echo "Verifying deletion of Data Volume(s)..."
+
     for DATA_VOL_ID in "${DATA_VOL_ARRAY[@]}"; do
-        if [[ -z "$DATA_VOL_ID" ]]; then continue; fi
-        
+        [[ -z "$DATA_VOL_ID" ]] && continue
+
         CURRENT_TIME=0
         DATA_VOL_DELETED=1
 
@@ -405,20 +394,24 @@ if [[ -n "$DATA_VOLS" ]]; then
             
             sleep "$SLEEP_INTERVAL"
             CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
-            echo "Waiting for $DATA_VOL_ID deletion (Time elapsed: ${CURRENT_TIME}s)"
-
-            if [ "$CURRENT_TIME" -ge "$DELETION_CHECK_MAX_TIME" ] && [ "$DATA_VOL_DELETED" -ne 0 ]; then
-                echo "Warning: Data Volume $DATA_VOL_ID could not be confirmed deleted within ${DELETION_CHECK_MAX_TIME} seconds."
-                # Allow continuing to check other data volumes even if one fails verification
-                break 
-            fi
+            echo "Waiting for $DATA_VOL_ID deletion (elapsed ${CURRENT_TIME}s)"
         done
+
+        if [ "$DATA_VOL_DELETED" -ne 0 ]; then
+            echo "Warning: Could not verify deletion of Data Volume $DATA_VOL_ID within ${DELETION_CHECK_MAX_TIME}s."
+        fi
     done
+else
+    echo "Skipping verification — No data volumes existed."
 fi
 
-echo "Volume deletion verification phase complete."
+
+echo "------------------------------------"
+echo "Storage Volume Deletion Completed"
+echo "------------------------------------"
 echo "--- Part 6 of 7 Complete ---"
 echo ""
+
 
 #--------------------------------------------------------------
 echo "Part 7 of 7:  Snapshot Deletion"
@@ -429,60 +422,77 @@ echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# --- Utility Function to check snapshot deletion status ---
-# This function relies on 'ibmcloud pi instance snapshot get' failing (non-zero exit code)
-# when the resource (snapshot) is successfully deleted (404 Not Found).
-check_snapshot_deleted() {
-    local snapshot_id=$1
-    # Attempt to retrieve snapshot details. Suppress output.
-    if ibmcloud pi instance snapshot get "$snapshot_id" > /dev/null 2>&1; then
-        return 1 # Failure (Snapshot still exists, command succeeded)
-    else
-        return 0 # Success (Snapshot appears deleted, command failed - indicating 404/Not Found)
-    fi
-}
+# Ensure DELETE_SNAPSHOT default exists
+DELETE_SNAPSHOT="${DELETE_SNAPSHOT:-No}"
 
-# --- Define constants for check loop ---
-SNAPSHOT_CHECK_MAX_TIME=120
-SLEEP_INTERVAL=30
-SNAPSHOT_DELETED=1
+echo "Delete Snapshot preference: $DELETE_SNAPSHOT"
 
-# --- 1. Print the Snapshot Name ---
-echo "Snapshot to be deleted: $MATCHING_SNAPSHOT_NAME"
+# If user says No → SKIP deletion entirely
+if [[ "$DELETE_SNAPSHOT" =~ ^(No|no|NO)$ ]]; then
+    echo "User preference is to retain snapshot. Skipping deletion."
+    echo "--- Part 7 of 7 Complete ---"
+    exit 0
+fi
 
-# --- 2. Delete the snapshot ---
-# The command to delete a snapshot is part of the deprecated 'ibmcloud pi snapshot' family,
-# replaced by 'ibmcloud pi instance snapshot delete'.
-echo "Initiating deletion for Snapshot ID: $MATCHING_SNAPSHOT_ID"
+echo "User preference is to delete snapshot. Proceeding..."
 
-if ! ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID"; then
-    echo "ERROR: Could not start snapshot deletion for $MATCHING_SNAPSHOT_ID"
-    exit 7
+# Safety check: ensure ID exists
+if [[ -z "$MATCHING_SNAPSHOT_ID" || "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
+    echo "WARNING: No snapshot ID available. Possibly already removed."
+    echo "--- Part 7 of 7 Complete ---"
+    exit 0
 fi
 
 
-# --- 3. Verification Loop ---
+# --- deletion utility ---
+check_snapshot_deleted() {
+    local snapshot_id=$1
+    if ibmcloud pi instance snapshot get "$snapshot_id" > /dev/null 2>&1; then
+        return 1
+    else
+        return 0
+    fi
+}
 
-# --- 3. Verification Loop ---
-CURRENT_TIME=0
+SNAPSHOT_CHECK_MAX_TIME=120
+SLEEP_INTERVAL=30
+
+echo "Attempting deletion of Snapshot ID: $MATCHING_SNAPSHOT_ID"
+if ! ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID"; then
+    echo "ERROR: Deletion command returned non-zero exit code."
+    exit 7
+fi
+
+# --- verification loop ---
 echo "Waiting up to ${SNAPSHOT_CHECK_MAX_TIME} seconds for snapshot deletion confirmation..."
+
+CURRENT_TIME=0
+SNAPSHOT_DELETE_RESULT="Unknown"
 
 while [ "$CURRENT_TIME" -lt "$SNAPSHOT_CHECK_MAX_TIME" ]; do
     if check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
         echo "Snapshot $MATCHING_SNAPSHOT_ID successfully deleted."
+        SNAPSHOT_DELETE_RESULT="Deleted successfully"
         break
     fi
 
     sleep "$SLEEP_INTERVAL"
     CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
-
     echo "Checking status... (${CURRENT_TIME}s elapsed)"
 done
 
+# Final check after timeout
 if ! check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
-    echo "ERROR: Snapshot $MATCHING_SNAPSHOT_ID still exists after ${SNAPSHOT_CHECK_MAX_TIME} seconds."
-    exit 7
+    echo "WARNING: Snapshot $MATCHING_SNAPSHOT_ID still exists."
+    echo "Cleanup will proceed — manual investigation recommended."
+    SNAPSHOT_DELETE_RESULT="Failed to delete — still exists"
+else
+    SNAPSHOT_DELETE_RESULT="Deleted successfully"
 fi
+
+
+echo "--- Part 7 of 7 Complete ---"
+
 
 
 # --------------------------------------------------------------
@@ -510,7 +520,10 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
 
         if ! ibmcloud pi ins delete "$LPAR_NAME"; then
             echo "ERROR: IBM Cloud rejected LPAR deletion request."
+            LPAR_DELETE_RESULT="Reject — deletion not permitted"
             exit 8
+
+            
         fi
 
         echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion to complete..."
@@ -518,12 +531,14 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
         while [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; do
             if ! check_instance_exists; then
                 echo "LPAR $LPAR_NAME confirmed deleted."
+                LPAR_DELETE_RESULT="Deleted successfully"
                 break
             fi
 
-            echo "LPAR still exists. Time elapsed: ${CURRENT_TIME}s — retrying in ${CHECK_INTERVAL}s..."
-            sleep "$CHECK_INTERVAL"
-            CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
+          echo "ERROR: LPAR still exists after timeout."
+          LPAR_DELETE_RESULT="Failed — still exists"
+          exit 8
+
         done
 
         # Final check after loop ends
@@ -547,13 +562,17 @@ echo "====================================================="
 
 echo "LPAR Shutdown Complete        : Yes"
 echo "Vol Detach/Delete Completed   : Yes"
-echo "Snapshot Removed              : Yes"
+echo "Snapshot Removed              : ${SNAPSHOT_DELETE_RESULT:-Unknown}"
+
 
 if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
     echo "LPAR Delete Requested         : Yes"
+    echo "LPAR Delete Result            : ${LPAR_DELETE_RESULT:-Unknown}"
 else
     echo "LPAR Delete Requested         : No"
+    echo "LPAR Delete Result            : Skipped"
 fi
+
 
 echo ""
 echo "[NEXT ACTION] Returning environment for next backup cycle"
