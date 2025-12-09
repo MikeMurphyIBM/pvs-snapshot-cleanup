@@ -1,63 +1,15 @@
 #!/bin/bash
 
-# Default log_print (works even if MODE is missing)
-log_print() {
-    printf "%s\n" "$1"
-}
 
-MODE="normal"  # or quiet
-
-
-########################################################################
-# QUIET MODE — hides everything except log_print output
-########################################################################
-if [[ "$MODE" == "quiet" ]]; then
-    exec >/dev/null 2>&1
-    log_print() {
-        printf "%s %s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$1"
-    }
-fi
-
-
-########################################################################
-# NORMAL MODE — timestamps everything printed (stdout + stderr)
-########################################################################
-if [[ "$MODE" == "normal" ]]; then
-    exec > >(awk '
-        /Retrieving API key token/ { next }
-        /IAM access token/ { next }
-        /Resource group:/ { next }
-        /Account:/ { next }
-        /User:/ { next }
-        /Region:/ { next }
-        /Variables loaded successfully/ { next }
-        /crn:v1:/ { next }
-
-        /^\[[0-9-]{10} [0-9:]{8}\]$/ { next }
-
-        {
-            line=$0
-            gsub(/\[[0-9-]{10} [0-9:]{8}\][ ]*/, "", line)
-            if (length(line) < 2) next
-
-            printf "[%s] %s\n", strftime("%Y-%m-%d %H:%M:%S"), line
-        }
-    ' | tee /proc/1/fd/1) \
-    2> >(awk '{ printf "[%s] %s\n", strftime("%Y-%m-%d %H:%M:%S"), $0 }' | tee /proc/1/fd/2)
-
-    log_print() {
-        printf "[%s] %s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$1"
-    }
-fi
 
 
 
      
 
-log_print "========================================================================="
-log_print "Job 3:  Environment Cleanup/Rollback post Backup Operations"
-log_print "========================================================================="
-log_print ""
+echo "========================================================================="
+echo "Job 3:  Environment Cleanup/Rollback post Backup Operations"
+echo "========================================================================="
+echo ""
 
 
 
