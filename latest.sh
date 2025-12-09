@@ -1,31 +1,33 @@
 #!/bin/bash
 
-exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }') \
-     2> >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }' >&2)
 
-
-
-##trying epoch and normal 12-08 1:16
+## Timestamp System Setup
 #####################################################
 # MODE 1 — log_print ONLY
 # (quiet execution: NO echo, NO errors, NO command output)
 #####################################################
-
-# Uncomment BOTH lines below to activate this mode:
-#exec >/dev/null 2>&1
+# To enable quiet mode, UNCOMMENT all 3 lines below:
+#
+# exec >/dev/null 2>&1
 # log_print() {
-#   printf "%s\n" "$1"
-#}
+#     printf "%s %s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$1"
+# }
+#
+# NOTE: In quiet mode, timestamps appear ONLY for log_print()
 
 
 #####################################################
 # MODE 2 — log_print + echo + errors (normal mode)
 #####################################################
-
 # >>> LEAVE THESE LINES UNCOMMENTED FOR FULL OUTPUT <<<
+# This will timestamp everything printed to stdout & stderr
+exec > >(tee /proc/1/fd/1 | awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }') \
+     2> >(tee /proc/1/fd/2 | awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }')
+
 log_print() {
     printf "%s\n" "$1"
 }
+
      
 
 log_print "========================================================================="
