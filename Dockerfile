@@ -1,6 +1,9 @@
 # Use a lightweight Debian base image
 FROM debian:stable-slim
 
+# Ensure RUN commands use bash (supports process substitution)
+SHELL ["/bin/bash", "-c"]
+
 # Set non-interactive mode for smooth dependency installation
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -9,30 +12,30 @@ ENV HOME=/root
 WORKDIR ${HOME}
 
 # -----------------------------------------------------------
-# 1. Install Dependencies (curl, jq, and bash)
+# 1. Install Dependencies (bash, coreutils, curl, jq)
 # -----------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    coreutils \
     curl \
+    jq \
     ca-certificates \
-    jq
+ && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------
-# Install IBM Cloud CLI and Power Virtual Server (Power-IaaS) Plugin
-# This step is COMBINED (using '&&') into a single RUN instruction.
-# This ensures that the shell environment where the IBM Cloud CLI is installed 
-# immediately proceeds to install the plugin, resolving the 'ibmcloud: not found' error.
+# 2. Install IBM Cloud CLI + PowerVS Plugin
 # -----------------------------------------------------------
 RUN curl -fsSL https://clis.cloud.ibm.com/install/linux | bash && \
     ibmcloud plugin install power-iaas -f
 
 # -----------------------------------------------------------
-# 2. Add Runtime Script and Define Entrypoint
+# 3. Add Runtime Script
 # -----------------------------------------------------------
-# Copy the executable script into the working directory
 COPY latest.sh .
 
-# Ensure the script is executable
 RUN chmod +x latest.sh
 
-# Define the command to execute when the container starts
+# -----------------------------------------------------------
+# 4. Run the Script
+# -----------------------------------------------------------
 CMD ["/root/latest.sh"]
