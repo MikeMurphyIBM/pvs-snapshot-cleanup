@@ -278,9 +278,27 @@ check_volumes_detached() {
     return 1        # still attached
 }
 
+# -----------------------------------------------------------
+# Helper: Check whether a volume is deleted
+# Returns 0 (success) if the volume is gone
+# -----------------------------------------------------------
+check_volume_deleted() {
+    local vol_id="$1"
+
+    # If the volume still exists, ibmcloud pi vol get returns 0
+    if ibmcloud pi vol get "$vol_id" > /dev/null 2>&1; then
+        return 1   # still exists
+    else
+        return 0   # deleted
+    fi
+}
+
+
 
 echo "LPAR is now ready for storage detachment and rollback operations."
+echo ""
 echo "--- Part 4 of 7 Complete ---"
+echo ""
 
 
 echo "========================================================================="
