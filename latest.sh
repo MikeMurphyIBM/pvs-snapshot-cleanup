@@ -484,7 +484,7 @@ echo "========================================================================="
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 
 # Exit immediately if a command exits with a non-zero status
-set -e
+#set -e
 
 # Ensure DELETE_SNAPSHOT default exists
 DELETE_SNAPSHOT="${DELETE_SNAPSHOT:-No}"
@@ -620,7 +620,7 @@ fi
 # --------------------------------------------------------------
 echo ""
 echo "====================================================="
-echo "[SNAPSHOT-CLEANUP] Final Stage Summary"
+echo "Final Stage Summary"
 echo "====================================================="
 
 echo "LPAR Shutdown Complete        : Yes"
@@ -640,7 +640,7 @@ fi
 echo ""
 echo "[NEXT ACTION] Returning environment for next backup cycle"
 echo ""
-echo "[SNAPSHOT-CLEANUP] Final Result: SUCCESS"
+echo "Final Result: SUCCESS"
 echo "====================================================="
 
 JOB_SUCCESS=1
