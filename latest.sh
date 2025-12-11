@@ -262,6 +262,23 @@ if [[ "$UPDATED_STATUS" != "SHUTOFF" && "$UPDATED_STATUS" != "OFF" ]]; then
     }
 fi
 
+# -----------------------------------------------------------
+# Helper: Check whether all volumes are detached from the LPAR
+# Returns 0 (success) if no volumes attached
+# -----------------------------------------------------------
+check_volumes_detached() {
+    local json
+    json=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null || echo "{}")
+
+    # If .volumes does NOT exist OR length == 0 → detached
+    if echo "$json" | jq -e '(.volumes | length == 0)' > /dev/null 2>&1; then
+        return 0    # detached
+    fi
+
+    return 1        # still attached
+}
+
+
 echo "LPAR is now ready for storage detachment and rollback operations."
 echo "--- Part 4 of 7 Complete ---"
 
