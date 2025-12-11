@@ -91,9 +91,9 @@ if [ "$VOLUME_DATA" == "[]" ] || [ -z "$(echo "$VOLUME_DATA" | jq '.volumes[]')"
     echo "INFO: Continuing cleanup assuming prior detach succeeded."
     BOOT_VOL=""
     DATA_VOLS=""
-else
-    BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == true) | .volumeID')
-    DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
+#else
+    #BOOT_VOL=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == true) | .volumeID')
+    #DATA_VOLS=$(echo "$VOLUME_DATA" | jq -r '.volumes[] | select(.bootVolume == false) | .volumeID' | paste -sd "," -)
 fi
 
 
@@ -180,7 +180,7 @@ fi
 echo ""
 echo "Snapshot Identification Complete"
 echo "Timestamp extracted: $TIMESTAMP"
-echo "
+echo ""
 
 
 echo ""
@@ -412,7 +412,7 @@ if [[ -n "$BOOT_VOL" || -n "$DATA_VOLS" ]]; then
             CURRENT_TIME=0
             DATA_VOL_DELETED=1
 
-            while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]]; do
+            while [ "$CURRENT_TIME" -lt "$DELETION_CHECK_MAX_TIME" ]; do
                 if check_volume_deleted "$DATA_VOL_ID"; then
                     echo "Data Volume $DATA_VOL_ID successfully deleted."
                     DATA_VOL_DELETED=0
