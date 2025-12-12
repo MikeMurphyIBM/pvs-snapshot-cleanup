@@ -577,9 +577,10 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
     echo "Resolving LPAR instance ID by name: $LPAR_NAME"
 
     INSTANCE_IDENTIFIER=$(ibmcloud pi instance list --json \
-        | jq -r ".pvmInstances[] | select(.name == \"$LPAR_NAME\") | .id" | head -n 1)
+        | jq -r ".pvmInstances[] | select(.name == \"$LPAR_NAME\") | .id" \
+        | head -n 1)
 
-    if [[ -z "$INSTANCE_IDENTIFIER" ]]; then
+    if [[ -z "$INSTANCE_IDENTIFIER" || "$INSTANCE_IDENTIFIER" == "null" ]]; then
         echo "LPAR $LPAR_NAME not found — skipping deletion."
         LPAR_DELETE_RESULT="Already deleted or not found"
     else
@@ -593,14 +594,42 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
         fi
 
         echo "LPAR delete request accepted."
-        LPAR_DELETE_RESULT="Delete submitted"
+        echo "Waiting for backend deletion to begin..."
+        sleep 60   # 🔑 critical initial pause
+
+        # -------------------------------------------------
+        # VERIFY DELETION (poll until instance disappears)
+        # -------------------------------------------------
+        DELETE_TIMEOUT=600   # 10 minutes max
+        POLL_INTERVAL=30
+        WAITED=0
+
+        echo "Polling for LPAR deletion completion..."
+
+        while [[ $WAITED -lt $DELETE_TIMEOUT ]]; do
+            CHECK=$(ibmcloud pi instance get "$INSTANCE_IDENTIFIER" --json 2>/dev/null || true)
+
+            if [[ -z "$CHECK" || "$CHECK" == "null" ]]; then
+                echo "LPAR $LPAR_NAME successfully deleted."
+                LPAR_DELETE_RESULT="Deleted successfully"
+                break
+            fi
+
+            echo "LPAR still exists — waiting ${POLL_INTERVAL}s (elapsed ${WAITED}s)"
+            sleep "$POLL_INTERVAL"
+            WAITED=$((WAITED + POLL_INTERVAL))
+        done
+
+        if [[ $WAITED -ge $DELETE_TIMEOUT ]]; then
+            echo "WARNING: LPAR deletion not confirmed after ${DELETE_TIMEOUT}s."
+            echo "Backend may still be processing deletion."
+            LPAR_DELETE_RESULT="Delete submitted — not yet confirmed"
+        fi
     fi
 else
     echo "LPAR Delete Requested: No — skipping deletion."
     LPAR_DELETE_RESULT="Skipped"
 fi
-
-
 
 
 
