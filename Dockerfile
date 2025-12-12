@@ -17,6 +17,7 @@ WORKDIR ${HOME}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     coreutils \
+    morewutils \
     curl \
     jq \
     ca-certificates \
@@ -31,11 +32,11 @@ RUN curl -fsSL https://clis.cloud.ibm.com/install/linux | bash && \
 # -----------------------------------------------------------
 # 3. Add Runtime Script
 # -----------------------------------------------------------
-COPY latest.sh .
+COPY latest2.sh .
 
-RUN chmod +x latest.sh
+RUN chmod +x latest2.sh
 
 # -----------------------------------------------------------
 # 4. Run the Script
 # -----------------------------------------------------------
-CMD ["/root/latest.sh"]
+CMD ["/root/latest2.sh"]
