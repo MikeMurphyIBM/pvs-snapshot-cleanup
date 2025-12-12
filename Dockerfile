@@ -32,11 +32,11 @@ RUN curl -fsSL https://clis.cloud.ibm.com/install/linux | bash && \
 # -----------------------------------------------------------
 # 3. Add Runtime Script
 # -----------------------------------------------------------
-COPY latest2.sh .
+COPY latest3.sh .
 
-RUN chmod +x latest2.sh
+RUN chmod +x latest3.sh
 
 # -----------------------------------------------------------
 # 4. Run the Script
 # -----------------------------------------------------------
-CMD ["/root/latest2.sh"]
+CMD ["/root/latest3.sh"]
