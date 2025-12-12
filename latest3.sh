@@ -35,7 +35,7 @@ SNAPSHOT_NAME="murph-$(date +"%Y%m%d%H%M")"
 JOB_SUCCESS=0
 
 echo "========================================================================="
-echo "Step 1 of 7:  IBM Cloud Authentication"
+echo "Step 1a of 7:  IBM Cloud Authentication"
 echo "========================================================================="
 
 echo "--- PowerVS Cleanup and Rollback Operation - Authentication ---"  
@@ -66,8 +66,39 @@ echo "Authentication and targeting successful."
 echo ""
 
 
-echo "--- Part 1 of 7 Complete ---"
+echo "--- Part 1a of 7 Complete ---"
 echo ""
+
+echo "========================================================================="
+echo "Step 1b of 7:  Resolving PVS LPAR Name > Instance ID"
+echo "========================================================================="
+
+echo ""
+echo "Resolving PowerVS LPAR name → Instance ID"
+echo ""
+
+LPAR_INSTANCE_ID=""
+
+LPAR_INSTANCE_ID=$(ibmcloud pi instance list --json 2>/dev/null \
+  | jq -r --arg NAME "$LPAR_NAME" '
+      .pvmInstances[]?
+      | select(.name == $NAME)
+      | .id
+    ' | head -n 1)
+
+if [[ -z "$LPAR_INSTANCE_ID" || "$LPAR_INSTANCE_ID" == "null" ]]; then
+    echo "WARNING: No PowerVS instance found with name '$LPAR_NAME'"
+    echo "LPAR may already be deleted or not yet created."
+    echo "Continuing in cleanup-safe mode."
+    LPAR_INSTANCE_ID=""
+else
+    echo "Resolved LPAR:"
+    echo "  Name : $LPAR_NAME"
+    echo "  ID   : $LPAR_INSTANCE_ID"
+fi
+
+echo ""
+
 
 
 echo "========================================================================="
@@ -217,7 +248,7 @@ echo "--- PowerVS Cleanup and Rollback Operation - LPAR Shutdown ---"
 
 # Utility: Check instance status
 get_lpar_status() {
-    ibmcloud pi ins get "$LPAR_NAME" --json 2>/dev/null | jq -r '.status'
+    ibmcloud pi ins get "$LPAR_INSTANCE_ID" --json 2>/dev/null | jq -r '.status'
 }
 
 # Utility: Wait for state transition
@@ -255,9 +286,9 @@ if [[ "$CURRENT_STATUS" != "SHUTOFF" && "$CURRENT_STATUS" != "OFF" ]]; then
     echo "Sending shutdown command..."
 
     # Try immediate shutdown
-    if ! ibmcloud pi ins act "$LPAR_NAME" --operation immediate-shutdown; then
+    if ! ibmcloud pi ins act "$LPAR_INSTANCE_ID" --operation immediate-shutdown; then
         echo "Immediate shutdown failed — trying graceful stop"
-        ibmcloud pi ins act "$LPAR_NAME" --operation stop || {
+        ibmcloud pi ins act "$LPAR_INSTANCE_ID" --operation stop || {
             echo "ERROR: Shutdown commands failed — cannot continue safely"
             exit 1
         }
@@ -350,12 +381,6 @@ echo ""
 echo "--- Part 5 of 7 Complete ---"
 echo ""
 
-
-
-echo "Volume detachment finalized, ready for deletion."
-echo ""
-echo "--- Part 5 of 7 Complete ---"
-echo ""
 
 
 echo "========================================================================="
@@ -574,20 +599,15 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
     echo "User parameter EXECUTE_LPAR_DELETE=Yes — proceeding with DELETE..."
     echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
 
-    echo "Resolving LPAR instance ID by name: $LPAR_NAME"
 
-    INSTANCE_IDENTIFIER=$(ibmcloud pi instance list --json \
-        | jq -r ".pvmInstances[] | select(.name == \"$LPAR_NAME\") | .id" \
-        | head -n 1)
-
-    if [[ -z "$INSTANCE_IDENTIFIER" || "$INSTANCE_IDENTIFIER" == "null" ]]; then
+    if [[ -z "$LPAR_INSTANCE_ID" || "$LPAR_INSTANCE_ID" == "null" ]]; then
         echo "LPAR $LPAR_NAME not found — skipping deletion."
         LPAR_DELETE_RESULT="Already deleted or not found"
     else
-        echo "Found LPAR $LPAR_NAME (Instance ID: $INSTANCE_IDENTIFIER)"
+        echo "Found LPAR $LPAR_NAME (Instance ID: $LPAR_INSTANCE_ID)"
         echo "Initiating permanent deletion..."
 
-        if ! ibmcloud pi instance delete "$INSTANCE_IDENTIFIER"; then
+        if ! ibmcloud pi instance delete "$LPAR_INSTANCE_ID"; then
             echo "ERROR: IBM Cloud rejected LPAR deletion request."
             LPAR_DELETE_RESULT="Reject — deletion not permitted"
             exit 8
@@ -607,7 +627,7 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
         echo "Polling for LPAR deletion completion..."
 
         while [[ $WAITED -lt $DELETE_TIMEOUT ]]; do
-            CHECK=$(ibmcloud pi instance get "$INSTANCE_IDENTIFIER" --json 2>/dev/null || true)
+            CHECK=$(ibmcloud pi instance get "$LPAR_INSTANCE_ID" --json 2>/dev/null || true)
 
             if [[ -z "$CHECK" || "$CHECK" == "null" ]]; then
                 echo "LPAR $LPAR_NAME successfully deleted."
