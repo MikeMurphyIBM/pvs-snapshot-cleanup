@@ -638,7 +638,7 @@ fi
 
 
 echo ""
-echo "[NEXT ACTION] Returning environment for next backup cycle"
+echo "Returning environment for next backup cycle"
 echo ""
 echo "Final Result: SUCCESS"
 echo "====================================================="
