@@ -331,17 +331,17 @@ if [[ -z "$BOOT_VOL" && -z "$DATA_VOLS" ]]; then
 
 # Case 2: Volumes already detached
 else
-    ATTACHED=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null \
+    ATTACHED=$(ibmcloud pi ins vol ls "$LPAR_INSTANCE_ID" --json 2>/dev/null \
         | jq -r '.volumes[]?.volumeID' || true)
 
     if [[ -z "$ATTACHED" ]]; then
-        echo "Volume check complete: No volumes currently attached to $LPAR_NAME."
+        echo "Volume check complete: No volumes currently attached to $LPAR_INSTANCE_ID."
 
     # Case 3: Volumes still attached → detach
     else
-        echo "Executing bulk detach operation for all volumes on $LPAR_NAME..."
+        echo "Executing bulk detach operation for all volumes on $LPAR_INSTANCE_ID..."
 
-        if ! ibmcloud pi ins vol bulk-detach "$LPAR_NAME" \
+        if ! ibmcloud pi ins vol bulk-detach "$LPAR_INSTANCE_ID" \
             --detach-all \
             --detach-primary; then
             echo "Warning: Bulk detach command failed to initiate. Check manually."
@@ -356,7 +356,7 @@ else
         echo "Waiting up to ${DETACH_TIMEOUT_SECONDS} seconds for all volumes to detach..."
 
         while [ "$CURRENT_TIME" -lt "$DETACH_TIMEOUT_SECONDS" ]; do
-            ATTACHED=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null \
+            ATTACHED=$(ibmcloud pi ins vol ls "$LPAR_INSTANCE_ID" --json 2>/dev/null \
                 | jq -r '.volumes[]?.volumeID' || true)
 
             if [[ -z "$ATTACHED" ]]; then
