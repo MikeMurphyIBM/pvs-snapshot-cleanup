@@ -483,80 +483,82 @@ echo "========================================================================="
 
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 
-# Exit immediately if a command exits with a non-zero status
-#set -e
+echo "========================================================================="
+echo "Part 7 of 7:  Snapshot Deletion"
+echo "========================================================================="
+
+echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 
 # Ensure DELETE_SNAPSHOT default exists
 DELETE_SNAPSHOT="${DELETE_SNAPSHOT:-No}"
 
 echo "Delete Snapshot preference: $DELETE_SNAPSHOT"
 
+SNAPSHOT_DELETE_RESULT="Not requested"
+
 # If user says No → SKIP deletion entirely
 if [[ "$DELETE_SNAPSHOT" =~ ^(No|no|NO)$ ]]; then
     echo "User preference is to retain snapshot. Skipping deletion."
+    SNAPSHOT_DELETE_RESULT="Skipped (retained by preference)"
     echo "--- Part 7 of 7 Complete ---"
-    exit 0
-fi
-
-echo "User preference is to delete snapshot. Proceeding..."
-
-# Safety check: ensure ID exists
-if [[ -z "$MATCHING_SNAPSHOT_ID" || "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
-    echo "WARNING: No snapshot ID available. Possibly already removed."
-    echo "--- Part 7 of 7 Complete ---"
-    exit 0
-fi
-
-
-# --- deletion utility ---
-check_snapshot_deleted() {
-    local snapshot_id=$1
-    if ibmcloud pi instance snapshot get "$snapshot_id" > /dev/null 2>&1; then
-        return 1
-    else
-        return 0
-    fi
-}
-
-SNAPSHOT_CHECK_MAX_TIME=120
-SLEEP_INTERVAL=30
-
-echo "Attempting deletion of Snapshot ID: $MATCHING_SNAPSHOT_ID"
-if ! ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID"; then
-    echo "ERROR: Deletion command returned non-zero exit code."
-    exit 7
-fi
-
-# --- verification loop ---
-echo "Waiting up to ${SNAPSHOT_CHECK_MAX_TIME} seconds for snapshot deletion confirmation..."
-
-CURRENT_TIME=0
-SNAPSHOT_DELETE_RESULT="Unknown"
-
-while [ "$CURRENT_TIME" -lt "$SNAPSHOT_CHECK_MAX_TIME" ]; do
-    if check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
-        echo "Snapshot $MATCHING_SNAPSHOT_ID successfully deleted."
-        SNAPSHOT_DELETE_RESULT="Deleted successfully"
-        break
-    fi
-
-    sleep "$SLEEP_INTERVAL"
-    CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
-    echo "Checking status... (${CURRENT_TIME}s elapsed)"
-done
-
-# Final check after timeout
-if ! check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
-    echo "WARNING: Snapshot $MATCHING_SNAPSHOT_ID still exists."
-    echo "Cleanup will proceed — manual investigation recommended."
-    SNAPSHOT_DELETE_RESULT="Failed to delete — still exists"
 else
-    SNAPSHOT_DELETE_RESULT="Deleted successfully"
-fi
+    echo "User preference is to delete snapshot. Proceeding..."
 
-echo ""
-echo "--- Part 7 of 7 Complete ---"
-echo ""
+    # Safety check: ensure ID exists
+    if [[ -z "$MATCHING_SNAPSHOT_ID" || "$MATCHING_SNAPSHOT_ID" == "null" ]]; then
+        echo "WARNING: No snapshot ID available. Possibly already removed."
+        SNAPSHOT_DELETE_RESULT="No snapshot ID (possibly already removed)"
+        echo "--- Part 7 of 7 Complete ---"
+    else
+        # --- deletion utility ---
+        check_snapshot_deleted() {
+            local snapshot_id=$1
+            if ibmcloud pi instance snapshot get "$snapshot_id" > /dev/null 2>&1; then
+                return 1
+            else
+                return 0
+            fi
+        }
+
+        SNAPSHOT_CHECK_MAX_TIME=120
+        SLEEP_INTERVAL=30
+
+        echo "Attempting deletion of Snapshot ID: $MATCHING_SNAPSHOT_ID"
+        if ! ibmcloud pi instance snapshot delete "$MATCHING_SNAPSHOT_ID"; then
+            echo "ERROR: Deletion command returned non-zero exit code."
+            SNAPSHOT_DELETE_RESULT="Delete command failed"
+        else
+            # --- verification loop ---
+            echo "Waiting up to ${SNAPSHOT_CHECK_MAX_TIME} seconds for snapshot deletion confirmation..."
+
+            CURRENT_TIME=0
+            SNAPSHOT_DELETE_RESULT="Unknown"
+
+            while [ "$CURRENT_TIME" -lt "$SNAPSHOT_CHECK_MAX_TIME" ]; do
+                if check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
+                    echo "Snapshot $MATCHING_SNAPSHOT_ID successfully deleted."
+                    SNAPSHOT_DELETE_RESULT="Deleted successfully"
+                    break
+                fi
+
+                sleep "$SLEEP_INTERVAL"
+                CURRENT_TIME=$((CURRENT_TIME + SLEEP_INTERVAL))
+                echo "Checking status... (${CURRENT_TIME}s elapsed)"
+            done
+
+            # Final check after timeout
+            if ! check_snapshot_deleted "$MATCHING_SNAPSHOT_ID"; then
+                echo "WARNING: Snapshot $MATCHING_SNAPSHOT_ID still exists."
+                echo "Cleanup will proceed — manual investigation recommended."
+                SNAPSHOT_DELETE_RESULT="Failed to delete — still exists"
+            fi
+        fi
+
+        echo ""
+        echo "--- Part 7 of 7 Complete ---"
+        echo ""
+    fi
+fi
 
 
 echo "========================================================================="
@@ -579,6 +581,7 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
     # Check whether the LPAR has already been deleted
     if ! check_instance_exists; then
         echo "LPAR $LPAR_NAME already deleted — skipping deletion."
+        LPAR_DELETE_RESULT="Already deleted"
     else
         echo "Initiating permanent deletion for LPAR: $LPAR_NAME"
 
@@ -586,8 +589,6 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
             echo "ERROR: IBM Cloud rejected LPAR deletion request."
             LPAR_DELETE_RESULT="Reject — deletion not permitted"
             exit 8
-
-            
         fi
 
         echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion to complete..."
@@ -599,19 +600,26 @@ if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
                 break
             fi
 
-          echo "ERROR: LPAR still exists after timeout."
-          LPAR_DELETE_RESULT="Failed — still exists"
-          exit 8
-
+            sleep "$CHECK_INTERVAL"
+            CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
+            echo "Waiting for LPAR deletion... (${CURRENT_TIME}s elapsed)"
         done
 
-        # Final check after loop ends
+        # Final timeout check after loop
         if check_instance_exists; then
             echo "ERROR: LPAR still exists after timeout."
-            exit 8
+            LPAR_DELETE_RESULT="Failed — still exists"
+            # Optional hard exit:
+            # exit 8
         fi
     fi
+
+else
+    echo "LPAR Delete Requested: No — skipping deletion."
+    LPAR_DELETE_RESULT="Skipped"
 fi
+
+
 
 
 
