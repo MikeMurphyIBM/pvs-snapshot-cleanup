@@ -505,12 +505,6 @@ echo "--- Part 6 of 7 Complete ---"
 echo ""
 
 
-echo ""
-echo "Storage Volume Deletion Completed"
-echo ""
-echo "--- Part 6 of 7 Complete ---"
-echo ""
-
 
 
 echo "========================================================================="
