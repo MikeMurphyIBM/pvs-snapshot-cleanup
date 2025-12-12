@@ -17,7 +17,7 @@ WORKDIR ${HOME}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     coreutils \
-    morewutils \
+    moreutils \
     curl \
     jq \
     ca-certificates \
