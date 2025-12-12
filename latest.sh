@@ -560,54 +560,30 @@ echo " OPTIONAL LPAR DELETE SECTION"
 echo "========================================================================="
 
 if [[ "$EXECUTE_LPAR_DELETE" == "Yes" ]]; then
-    echo "User parameter EXECUTE_LPAR_DELETE=true — proceeding with DELETE..."
+    echo "User parameter EXECUTE_LPAR_DELETE=Yes — proceeding with DELETE..."
     echo "--- PowerVS Cleanup and Rollback Operation - LPAR Deletion ---"
 
-    # Function to check if instance still exists
-    check_instance_exists() {
-        ibmcloud pi ins get "$LPAR_NAME" > /dev/null 2>&1
-    }
+    echo "Resolving LPAR instance ID by name: $LPAR_NAME"
 
-    DELETE_CHECK_MAX_TIME=300   # 5 minutes
-    CHECK_INTERVAL=30
-    CURRENT_TIME=0
+    INSTANCE_IDENTIFIER=$(ibmcloud pi instance list --json \
+        | jq -r ".pvmInstances[] | select(.name == \"$LPAR_NAME\") | .id" | head -n 1)
 
-    # Check whether the LPAR has already been deleted
-    if ! check_instance_exists; then
-        echo "LPAR $LPAR_NAME already deleted — skipping deletion."
-        LPAR_DELETE_RESULT="Already deleted"
+    if [[ -z "$INSTANCE_IDENTIFIER" ]]; then
+        echo "LPAR $LPAR_NAME not found — skipping deletion."
+        LPAR_DELETE_RESULT="Already deleted or not found"
     else
-        echo "Initiating permanent deletion for LPAR: $LPAR_NAME"
+        echo "Found LPAR $LPAR_NAME (Instance ID: $INSTANCE_IDENTIFIER)"
+        echo "Initiating permanent deletion..."
 
-        if ! ibmcloud pi ins delete "$LPAR_NAME"; then
+        if ! ibmcloud pi instance delete "$INSTANCE_IDENTIFIER"; then
             echo "ERROR: IBM Cloud rejected LPAR deletion request."
             LPAR_DELETE_RESULT="Reject — deletion not permitted"
             exit 8
         fi
 
-        echo "Waiting up to ${DELETE_CHECK_MAX_TIME}s for LPAR deletion to complete..."
-
-        while [ "$CURRENT_TIME" -lt "$DELETE_CHECK_MAX_TIME" ]; do
-            if ! check_instance_exists; then
-                echo "LPAR $LPAR_NAME confirmed deleted."
-                LPAR_DELETE_RESULT="Deleted successfully"
-                break
-            fi
-
-            sleep "$CHECK_INTERVAL"
-            CURRENT_TIME=$((CURRENT_TIME + CHECK_INTERVAL))
-            echo "Waiting for LPAR deletion... (${CURRENT_TIME}s elapsed)"
-        done
-
-        # Final timeout check after loop
-        if check_instance_exists; then
-            echo "ERROR: LPAR still exists after timeout."
-            LPAR_DELETE_RESULT="Failed — still exists"
-            # Optional hard exit:
-            # exit 8
-        fi
+        echo "LPAR delete request accepted."
+        LPAR_DELETE_RESULT="Delete submitted"
     fi
-
 else
     echo "LPAR Delete Requested: No — skipping deletion."
     LPAR_DELETE_RESULT="Skipped"
