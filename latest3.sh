@@ -292,51 +292,69 @@ echo "========================================================================="
 echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
 echo "========================================================================="
 
+echo "========================================================================="
+echo "Part 5 of 7:  Detaching Boot and Storage Volumes"
+echo "========================================================================="
+
 echo "--- PowerVS Cleanup and Rollback Operation - Detaching Volumes---"
 
+# Case 1: We never discovered volumes earlier
 if [[ -z "$BOOT_VOL" && -z "$DATA_VOLS" ]]; then
     echo "INFO: No volumes discovered earlier — assuming detachment already occurred."
-elif check_volumes_detached; then
-    echo "Volume check complete: No volumes currently attached to $LPAR_NAME."
+
+# Case 2: Volumes already detached
 else
+    ATTACHED=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null \
+        | jq -r '.volumes[]?.volumeID' || true)
 
-    echo "Executing bulk detach operation for all volumes on $LPAR_NAME..."
-    
-    # Detach all volumes including the primary/boot volume
-    if ! ibmcloud pi ins vol bulk-detach "$LPAR_NAME" --detach-all --detach-primary; then
-       echo "Warning: Bulk detach command failed to initiate. Check manually."
-        # Attempt to proceed regardless of failure to initiate bulk detach
-    fi 
+    if [[ -z "$ATTACHED" ]]; then
+        echo "Volume check complete: No volumes currently attached to $LPAR_NAME."
 
-    echo "Allowing time for detach operation to propagate"
-    sleep 120
+    # Case 3: Volumes still attached → detach
+    else
+        echo "Executing bulk detach operation for all volumes on $LPAR_NAME..."
 
-
-    
-    DETACH_TIMEOUT_SECONDS=240
-    CURRENT_TIME=0
-    
-    echo "Waiting up to ${DETACH_TIMEOUT_SECONDS} seconds for all volumes to detach..."
-
-    while [ "$CURRENT_TIME" -lt "$DETACH_TIMEOUT_SECONDS" ]; do
-        if check_volumes_detached; then
-            echo "All volumes successfully detached."
-            break
+        if ! ibmcloud pi ins vol bulk-detach "$LPAR_NAME" \
+            --detach-all \
+            --detach-primary; then
+            echo "Warning: Bulk detach command failed to initiate. Check manually."
         fi
 
-        sleep 20
-        CURRENT_TIME=$((CURRENT_TIME + 20))
+        echo "Allowing time for detach operation to propagate"
+        sleep 120
 
-        echo "Waiting for volumes to detach (Time elapsed: ${CURRENT_TIME}s)"
-     done
+        DETACH_TIMEOUT_SECONDS=240
+        CURRENT_TIME=0
 
-     if [ "$CURRENT_TIME" -ge "$DETACH_TIMEOUT_SECONDS" ]; then
-            echo "Error: Volumes failed to detach within ${DETACH_TIMEOUT_SECONDS} seconds. Exiting."
+        echo "Waiting up to ${DETACH_TIMEOUT_SECONDS} seconds for all volumes to detach..."
+
+        while [ "$CURRENT_TIME" -lt "$DETACH_TIMEOUT_SECONDS" ]; do
+            ATTACHED=$(ibmcloud pi ins vol ls "$LPAR_NAME" --json 2>/dev/null \
+                | jq -r '.volumes[]?.volumeID' || true)
+
+            if [[ -z "$ATTACHED" ]]; then
+                echo "All volumes successfully detached."
+                break
+            fi
+
+            sleep 20
+            CURRENT_TIME=$((CURRENT_TIME + 20))
+            echo "Waiting for volumes to detach (Time elapsed: ${CURRENT_TIME}s)"
+        done
+
+        if [[ "$CURRENT_TIME" -ge "$DETACH_TIMEOUT_SECONDS" ]]; then
+            echo "Error: Volumes failed to detach within ${DETACH_TIMEOUT_SECONDS} seconds."
             exit 1
-     fi
-     
-    
+        fi
+    fi
 fi
+
+echo "Volume detachment finalized, ready for deletion."
+echo ""
+echo "--- Part 5 of 7 Complete ---"
+echo ""
+
+
 
 echo "Volume detachment finalized, ready for deletion."
 echo ""
