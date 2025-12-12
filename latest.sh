@@ -483,12 +483,6 @@ echo "========================================================================="
 
 echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
 
-echo "========================================================================="
-echo "Part 7 of 7:  Snapshot Deletion"
-echo "========================================================================="
-
-echo "--- PowerVS Cleanup and Rollback Operation - Snapshot Deletion ---"
-
 # Ensure DELETE_SNAPSHOT default exists
 DELETE_SNAPSHOT="${DELETE_SNAPSHOT:-No}"
 
@@ -654,7 +648,7 @@ echo "====================================================="
 JOB_SUCCESS=1
 
 
-sleep 1
+sleep 2
 exit 0
 
 
